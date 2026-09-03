@@ -26,6 +26,8 @@ def evaluate_idea(idea: "Idea", rng: Random) -> Evaluation:
 
 def mutate(idea: "Idea", agent: "Agent", rng: Random) -> "Idea":
     """Create a new strategy hypothesis from an existing one."""
+    from .core import Idea
+
     mutations = [
         "tighten the risk filter",
         "add a volatility regime filter",
@@ -45,6 +47,8 @@ def mutate(idea: "Idea", agent: "Agent", rng: Random) -> "Idea":
 
 def crossover(a: "Idea", b: "Idea", agent: "Agent", rng: Random) -> "Idea":
     """Combine two hypotheses into a third falsifiable hypothesis."""
+    from .core import Idea
+
     thesis = f"Combine [{a.thesis}] with [{b.thesis}] and test the interaction out-of-sample."
     return Idea(
         title=f"cross({a.title[:24]}+{b.title[:24]})-{rng.randrange(1_000_000)}",
