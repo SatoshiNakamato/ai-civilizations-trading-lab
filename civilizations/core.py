@@ -7,6 +7,7 @@ from typing import Dict, List
 from .communication import CommunicationNetwork
 from .evolution import crossover, evaluate_idea, mutate, rank_ideas
 from .learning import Intelligence
+from .society import Society
 
 ARCHETYPES = [
     ("quant", "Quant Researcher"), ("arb", "Arbitrage Hunter"),
@@ -42,6 +43,7 @@ class Agent:
     wealth_score: float = 0.0
     reputation: float = 0.0
     age: int = 0
+    beliefs: Dict[str, float] = field(default_factory=dict)
 
     def observe_and_propose(self, tick: int, rng: Random) -> Idea:
         themes = {
@@ -79,6 +81,7 @@ class Civilization:
         self.global_ideas: List[Idea] = []
         self.events: List[str] = []
         self.network = CommunicationNetwork()
+        self.society = Society()
         self._create_population(size)
 
     def _create_population(self, size: int) -> None:
@@ -100,6 +103,13 @@ class Civilization:
             agent.evaluate(idea, self.rng)
             agent.ideas.append(idea)
             self.global_ideas.append(idea)
+            self.society.record_knowledge(
+                topic=agent.archetype,
+                claim=idea.thesis,
+                author=agent.agent_id,
+                evidence=idea.fitness,
+                generation=self.generation,
+            )
             proposals.append(idea)
 
         ranked = rank_ideas(proposals)
@@ -109,11 +119,16 @@ class Civilization:
             for peer in peers:
                 sender = self.agents[idea.origin]
                 kind = "endorse" if peer.cooperation >= 0.5 else "challenge"
-                self.network.send(sender.agent_id, peer.agent_id, kind,
-                                  f"{kind}: {idea.title}; thesis={idea.thesis}; fitness={idea.fitness:.3f}", self.tick)
-                sender.intelligence.learn_from_collaboration(
-                    0.75 if kind == "endorse" else 0.85
-                )
+                message = f"{kind}: {idea.title}; thesis={idea.thesis}; fitness={idea.fitness:.3f}"
+                self.network.send(sender.agent_id, peer.agent_id, kind, message, self.tick)
+                useful = 0.75 if kind == "endorse" else 0.85
+                self.society.talk(self.generation, sender.agent_id, peer.agent_id,
+                                  idea.title, message, useful)
+                sender.intelligence.learn_from_collaboration(useful)
+                if kind == "endorse":
+                    self.society.confirm(idea.archetype)
+                else:
+                    self.society.challenge(idea.archetype)
                 self.network.update_reputation(sender.agent_id, 0.01 if idea.fitness >= 0.6 else -0.005)
                 if idea.fitness >= 0.55 and self.rng.random() < peer.curiosity:
                     child = mutate(idea, peer, self.rng)
@@ -150,6 +165,7 @@ class Civilization:
             "agents": len(self.agents),
             "ideas": len(self.global_ideas),
             "messages": len(self.network.memory.messages),
+            "society": self.society.snapshot(),
             "best_agents": [
                 {"id": a.agent_id, "archetype": a.archetype,
                  "capability": round(a.intelligence.capability_score, 3),
@@ -175,6 +191,8 @@ if __name__ == "__main__":
         print(f"\nGeneration {state['generation']}")
         print(f"Ideas discovered: {state['ideas']}")
         print(f"Messages: {state['messages']}")
+        print(f"Shared knowledge: {state['society']['knowledge_count']}")
+        print(f"Conversations: {state['society']['conversation_count']}")
         if state["best_agents"]:
             best_agent = state["best_agents"][0]
             print("Top capability:", best_agent["id"], best_agent["capability"],
