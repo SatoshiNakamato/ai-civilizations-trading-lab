@@ -7,6 +7,7 @@ import time
 from typing import Iterable
 from urllib.parse import quote_plus, unquote
 from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 
 @dataclass(frozen=True)
@@ -19,11 +20,11 @@ class ResearchDocument:
 
 
 class PublicWebCollector:
-    """Bounded, read-only public-web search collector.
+    """Bounded, read-only public-web research collector.
 
-    Uses DuckDuckGo's lightweight public HTML endpoint and a parser tolerant of
-    markup changes. It only reads public pages and never logs in, submits forms,
-    executes financial actions, or signs transactions.
+    Primary source is Google News RSS, with DuckDuckGo HTML as a fallback.
+    RSS is used because it is lightweight and works well in constrained
+    environments such as Termux. The collector only reads public information.
     """
 
     def __init__(self, timeout: int = 10, min_interval: float = 1.0):
@@ -32,23 +33,21 @@ class PublicWebCollector:
         self._last_request = 0.0
         self._cache: dict[str, list[dict[str, str]]] = {}
 
-    def _fetch(self, endpoint: str, query: str) -> str:
+    def _fetch(self, url: str) -> str:
         wait = self.min_interval - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
-        url = endpoint + quote_plus(query)
         request = Request(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
+                "User-Agent": "AI-Civilizations-Lab/1.0 (research; read-only)",
+                "Accept": "application/rss+xml, application/xml, text/html;q=0.9, */*;q=0.8",
             },
         )
         with urlopen(request, timeout=self.timeout) as response:
-            html = response.read().decode("utf-8", errors="replace")
+            body = response.read().decode("utf-8", errors="replace")
         self._last_request = time.monotonic()
-        return html
+        return body
 
     @staticmethod
     def _clean(value: str) -> str:
@@ -56,33 +55,42 @@ class PublicWebCollector:
         value = re.sub(r"\s+", " ", value)
         return unquote(value).strip()
 
-    def _parse_results(self, html: str) -> list[dict[str, str]]:
-        # DuckDuckGo's normal HTML endpoint.
+    def _google_news(self, query: str, limit: int) -> list[dict[str, str]]:
+        url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-US&gl=US&ceid=US:en"
+        xml = self._fetch(url)
+        root = ET.fromstring(xml)
+        results = []
+        for item in root.findall(".//item"):
+            title = self._clean(item.findtext("title", ""))
+            link = self._clean(item.findtext("link", ""))
+            description = self._clean(item.findtext("description", ""))
+            pubdate = self._clean(item.findtext("pubDate", ""))
+            source = item.findtext("source", "") or "Google News"
+            if title:
+                results.append({
+                    "title": title,
+                    "url": link,
+                    "snippet": description,
+                    "published": pubdate,
+                    "source": self._clean(source),
+                })
+            if len(results) >= limit:
+                break
+        return results
+
+    def _duckduckgo(self, query: str, limit: int) -> list[dict[str, str]]:
+        url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
+        html = self._fetch(url)
         pattern = re.compile(
             r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
             re.I | re.S,
         )
-        matches = pattern.findall(html)
         results = []
-        for href, title_html in matches:
-            title = self._clean(title_html)
-            if title:
-                results.append({"title": title, "url": href, "snippet": ""})
-
-        if results:
-            return results
-
-        # DuckDuckGo Lite fallback, whose markup is simpler and more stable.
-        pattern = re.compile(
-            r'<a[^>]+class=["\']result-link["\'][^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-            re.I | re.S,
-        )
         for href, title_html in pattern.findall(html):
             title = self._clean(title_html)
             if title:
-                results.append({"title": title, "url": href, "snippet": ""})
-
-        return results
+                results.append({"title": title, "url": href, "snippet": "", "source": "DuckDuckGo"})
+        return results[:limit]
 
     def search(self, query: str, limit: int = 5) -> list[dict[str, str]]:
         query = " ".join(query.split())[:300]
@@ -93,15 +101,19 @@ class PublicWebCollector:
         if key in self._cache:
             return self._cache[key]
 
-        html = self._fetch("https://html.duckduckgo.com/html/?q=", query)
-        results = self._parse_results(html)
+        results: list[dict[str, str]] = []
+        try:
+            results = self._google_news(query, limit)
+        except Exception:
+            pass
         if not results:
-            html = self._fetch("https://lite.duckduckgo.com/lite/?q=", query)
-            results = self._parse_results(html)
+            try:
+                results = self._duckduckgo(query, limit)
+            except Exception:
+                results = []
 
-        results = results[:limit]
-        self._cache[key] = results
-        return results
+        self._cache[key] = results[:limit]
+        return self._cache[key]
 
 
 class ResearchDesk:
@@ -126,14 +138,8 @@ class ResearchDesk:
             return []
         docs = []
         for item in self.web_collector.search(query, limit):
-            docs.append(
-                self.ingest(
-                    "duckduckgo-public-search",
-                    item.get("title", ""),
-                    item.get("snippet", ""),
-                    item.get("url", ""),
-                )
-            )
+            source = item.get("source", "public-web")
+            docs.append(self.ingest(source, item.get("title", ""), item.get("snippet", ""), item.get("url", "")))
         return docs
 
     def search(self, query: str, limit: int = 5) -> list[ResearchDocument]:
