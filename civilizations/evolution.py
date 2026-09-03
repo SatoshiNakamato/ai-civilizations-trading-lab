@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from random import Random
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
-from .core import Agent, Idea
+if TYPE_CHECKING:
+    from .core import Agent, Idea
 
 
 @dataclass
@@ -14,7 +15,7 @@ class Evaluation:
     evidence: str
 
 
-def evaluate_idea(idea: Idea, rng: Random) -> Evaluation:
+def evaluate_idea(idea: "Idea", rng: Random) -> Evaluation:
     """Evaluate a hypothesis in the simulation; not a live-market forecast."""
     signal_quality = rng.uniform(0.0, 1.0)
     robustness = rng.uniform(0.0, 1.0)
@@ -23,7 +24,7 @@ def evaluate_idea(idea: Idea, rng: Random) -> Evaluation:
     return Evaluation(idea.title, score, "simulated evidence")
 
 
-def mutate(idea: Idea, agent: Agent, rng: Random) -> Idea:
+def mutate(idea: "Idea", agent: "Agent", rng: Random) -> "Idea":
     """Create a new strategy hypothesis from an existing one."""
     mutations = [
         "tighten the risk filter",
@@ -42,7 +43,7 @@ def mutate(idea: Idea, agent: Agent, rng: Random) -> Idea:
     )
 
 
-def crossover(a: Idea, b: Idea, agent: Agent, rng: Random) -> Idea:
+def crossover(a: "Idea", b: "Idea", agent: "Agent", rng: Random) -> "Idea":
     """Combine two hypotheses into a third falsifiable hypothesis."""
     thesis = f"Combine [{a.thesis}] with [{b.thesis}] and test the interaction out-of-sample."
     return Idea(
@@ -54,5 +55,5 @@ def crossover(a: Idea, b: Idea, agent: Agent, rng: Random) -> Idea:
     )
 
 
-def rank_ideas(ideas: Iterable[Idea]) -> list[Idea]:
+def rank_ideas(ideas: Iterable["Idea"]) -> list["Idea"]:
     return sorted(ideas, key=lambda x: x.fitness, reverse=True)
