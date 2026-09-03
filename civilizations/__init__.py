@@ -1,8 +1,4 @@
-"""AI civilization package.
-
-Core classes are exposed lazily so ``python -m civilizations.core`` does not
-load the core module twice before execution.
-"""
+"""AI civilization package."""
 
 __all__ = ["Agent", "Civilization", "Idea"]
 
