@@ -11,6 +11,14 @@ class Reputation:
     collaborations: int = 0
     score: float = 0.0
 
+    def record_validation(self, validation_score: float) -> None:
+        if validation_score > 0:
+            self.verified += 1
+            self.score += validation_score
+        elif validation_score < 0:
+            self.failed += 1
+            self.score += validation_score
+
 
 class ReputationLedger:
     def __init__(self):
@@ -29,6 +37,11 @@ class ReputationLedger:
         else:
             r.failed += 1
             r.score -= 0.5
+        return r
+
+    def record_validation(self, agent_id: str, validation_score: float):
+        r = self.get(agent_id)
+        r.record_validation(validation_score)
         return r
 
     def record_collaboration(self, agent_id: str):
