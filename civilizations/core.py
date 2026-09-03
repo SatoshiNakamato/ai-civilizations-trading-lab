@@ -126,9 +126,9 @@ class Civilization:
                                   idea.title, message, useful)
                 sender.intelligence.learn_from_collaboration(useful)
                 if kind == "endorse":
-                    self.society.confirm(idea.archetype)
+                    self.society.confirm(idea.title)
                 else:
-                    self.society.challenge(idea.archetype)
+                    self.society.challenge(idea.title)
                 self.network.update_reputation(sender.agent_id, 0.01 if idea.fitness >= 0.6 else -0.005)
                 if idea.fitness >= 0.55 and self.rng.random() < peer.curiosity:
                     child = mutate(idea, peer, self.rng)
