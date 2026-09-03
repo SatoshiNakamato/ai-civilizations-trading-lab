@@ -7,8 +7,9 @@ from typing import Dict, List
 from .communication import CommunicationNetwork
 from .evolution import crossover, evaluate_idea, mutate, rank_ideas
 from .learning import Intelligence
-from .research import ResearchDesk
+from .research import PublicWebCollector, ResearchDesk
 from .research_bridge import ResearchBridge
+from .research_bureau import ResearchBureau
 from .society import Society
 
 ARCHETYPES = [("quant", "Quant Researcher"), ("arb", "Arbitrage Hunter"), ("macro", "Macro Analyst"), ("momentum", "Momentum Trader"), ("value", "Value Researcher"), ("contrarian", "Contrarian"), ("risk", "Risk Manager"), ("probability", "Prediction-Market Analyst"), ("microstructure", "Market Microstructure Specialist"), ("explorer", "Strategy Explorer")]
@@ -56,7 +57,9 @@ class Civilization:
         self.rng = Random(seed); self.tick = 0; self.generation = 0
         self.agents: Dict[str, Agent] = {}; self.global_ideas: List[Idea] = []; self.events: List[str] = []
         self.network = CommunicationNetwork(); self.society = Society()
-        self.research = ResearchDesk(); self.research_bridge = ResearchBridge(self.research)
+        self.research = ResearchDesk(web_collector=PublicWebCollector())
+        self.research_bridge = ResearchBridge(self.research, self.research.web_collector)
+        self.bureau = ResearchBureau(self.research.web_collector)
         self._seed_research(); self._create_population(size)
 
     def _seed_research(self) -> None:
@@ -73,8 +76,12 @@ class Civilization:
     def step(self) -> dict:
         self.tick += 1; proposals = []
         for agent in self.agents.values():
-            context = self.research_bridge.build_context(agent.agent_id, self._research_query(agent), limit=3)
+            query = self._research_query(agent)
+            self.bureau.submit_question(agent.agent_id, query, agent.curiosity)
+            context = self.research_bridge.build_context(agent.agent_id, query, limit=3)
             idea = agent.observe_and_propose(self.tick, self.rng, context); agent.evaluate(idea, self.rng); agent.ideas.append(idea); self.global_ideas.append(idea)
+            finding = self.bureau.investigate(agent.agent_id, query, limit=3)
+            finding.confidence = min(1.0, 0.2 + idea.fitness * 0.6)
             self.society.record_knowledge(f"{agent.archetype}:{idea.title}", idea.thesis, agent.agent_id, idea.fitness, self.generation)
             proposals.append(idea)
         champions = rank_ideas(proposals)[:20]
@@ -92,7 +99,7 @@ class Civilization:
         if len(champions) >= 2:
             for peer in self._sample_peers("__council__", 5):
                 child = crossover(champions[0], champions[1], peer, self.rng); peer.evaluate(child, self.rng); peer.ideas.append(child); self.global_ideas.append(child); self.society.record_knowledge(f"{peer.archetype}:{child.title}", child.thesis, peer.agent_id, child.fitness, self.generation)
-        self.generation += 1; self.events.append(f"tick={self.tick}: {len(proposals)} research-informed hypotheses; {len(champions)} debated; new candidates evolved"); self.events = self.events[-100:]
+        self.generation += 1; self.bureau.generation = self.generation; self.events.append(f"tick={self.tick}: {len(proposals)} web-research-informed hypotheses; {len(champions)} debated; new candidates evolved"); self.events = self.events[-100:]
         return self.snapshot()
 
     def _sample_peers(self, origin: str, count: int):
@@ -100,12 +107,12 @@ class Civilization:
 
     def snapshot(self) -> dict:
         top = sorted(self.global_ideas, key=lambda x:x.fitness, reverse=True)[:10]; best_agents = sorted(self.agents.values(), key=lambda a:a.intelligence.capability_score, reverse=True)[:10]
-        return {"tick":self.tick,"generation":self.generation,"agents":len(self.agents),"ideas":len(self.global_ideas),"messages":len(self.network.memory.messages),"research":self.research.snapshot(),"society":self.society.snapshot(),"best_agents":[{"id":a.agent_id,"archetype":a.archetype,"capability":round(a.intelligence.capability_score,3),"experience":a.intelligence.experience,"discoveries":a.intelligence.discoveries} for a in best_agents],"top_ideas":[{"title":i.title,"origin":i.origin,"fitness":round(i.fitness,4),"generation":i.generation} for i in top],"events":self.events[-20:]}
+        return {"tick":self.tick,"generation":self.generation,"agents":len(self.agents),"ideas":len(self.global_ideas),"messages":len(self.network.memory.messages),"research":self.research.snapshot(),"bureau":self.bureau.snapshot(),"society":self.society.snapshot(),"best_agents":[{"id":a.agent_id,"archetype":a.archetype,"capability":round(a.intelligence.capability_score,3),"experience":a.intelligence.experience,"discoveries":a.intelligence.discoveries} for a in best_agents],"top_ideas":[{"title":i.title,"origin":i.origin,"fitness":round(i.fitness,4),"generation":i.generation} for i in top],"events":self.events[-20:]}
 
 if __name__ == "__main__":
     civilization = Civilization(100, 42); print("AI CIVILIZATION ONLINE"); print("======================"); print(f"Population: {len(civilization.agents)}")
     for _ in range(10):
-        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Conversations: {state['society']['conversation_count']}")
+        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Research findings: {state['bureau']['findings']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Conversations: {state['society']['conversation_count']}")
         if state['best_agents']:
             a=state['best_agents'][0]; print("Top capability:",a['id'],a['capability'],"experience:",a['experience'])
         if state['top_ideas']:
