@@ -31,37 +31,58 @@ class CrossExchangeOpportunity:
 
 
 class PublicCrossExchangeData:
-    """Read-only public quotes from multiple exchanges."""
+    """Read-only public top-of-book quotes from several venues."""
 
     def __init__(self, timeout: int = 8):
         self.timeout = timeout
+        self.last_errors: dict[str, str] = {}
 
     def _get(self, url: str):
-        req = urllib.request.Request(url, headers={"User-Agent": "ai-civilizations-trading-lab/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "ai-civilizations-trading-lab/1.0", "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             return json.loads(r.read().decode())
 
     def binance(self, symbol: str) -> VenueQuote:
-        q = urllib.parse.urlencode({"symbol": symbol.upper()})
-        x = self._get("https://api.binance.com/api/v3/ticker/bookTicker?" + q)
+        x = self._get("https://api.binance.com/api/v3/ticker/bookTicker?" + urllib.parse.urlencode({"symbol": symbol.upper()}))
         return VenueQuote("BINANCE", symbol.upper(), float(x["bidPrice"]), float(x["askPrice"]), time.time())
 
     def kraken(self, symbol: str) -> VenueQuote:
-        # Map common USDT symbols to Kraken's public pair names.
         pair = {"BTCUSDT": "XBTUSDT", "ETHUSDT": "ETHUSDT", "SOLUSDT": "SOLUSDT"}.get(symbol.upper(), symbol.upper())
         data = self._get("https://api.kraken.com/0/public/Ticker?" + urllib.parse.urlencode({"pair": pair}))
+        if data.get("error"):
+            raise ValueError("Kraken: " + ", ".join(data["error"]))
         result = data.get("result", {})
         if not result:
             raise ValueError(f"Kraken returned no quote for {pair}")
         row = next(iter(result.values()))
         return VenueQuote("KRAKEN", symbol.upper(), float(row["b"][0]), float(row["a"][0]), time.time())
 
+    def coinbase(self, symbol: str) -> VenueQuote:
+        pair = symbol.upper().replace("USDT", "-USD")
+        x = self._get("https://api.exchange.coinbase.com/products/" + urllib.parse.quote(pair) + "/ticker")
+        return VenueQuote("COINBASE", symbol.upper(), float(x["bid"]), float(x["ask"]), time.time())
+
+    def collect(self, symbol: str) -> list[VenueQuote]:
+        self.last_errors = {}
+        quotes: list[VenueQuote] = []
+        for name, getter in (("BINANCE", self.binance), ("KRAKEN", self.kraken), ("COINBASE", self.coinbase)):
+            try:
+                q = getter(symbol)
+                if q.bid > 0 and q.ask >= q.bid:
+                    quotes.append(q)
+                else:
+                    self.last_errors[name] = "invalid bid/ask"
+            except Exception as exc:
+                self.last_errors[name] = str(exc)
+        return quotes
+
 
 class CrossExchangeArbitrageLab:
-    """Find research-only executable-looking cross-venue spreads.
+    """Research-only cross-exchange arbitrage detector.
 
-    A result is marked executable only when both quotes are fresh and the
-    estimated net spread is positive. It never submits orders or moves funds.
+    It compares buy-side asks against another venue's sell-side bids. It
+    accounts for configurable round-trip fees and slippage estimates and
+    never places orders or moves funds.
     """
 
     def __init__(self, provider: PublicCrossExchangeData | None = None, fee_pct: float = 0.20, slippage_pct: float = 0.10, max_age_seconds: float = 10.0):
@@ -74,23 +95,34 @@ class CrossExchangeArbitrageLab:
         symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
         out: list[CrossExchangeOpportunity] = []
         for symbol in symbols:
-            quotes: list[VenueQuote] = []
-            for getter in (self.provider.binance, self.provider.kraken):
-                try:
-                    quotes.append(getter(symbol))
-                except Exception:
-                    continue
-            if len(quotes) < 2:
-                continue
+            quotes = self.provider.collect(symbol)
             for buy in quotes:
                 for sell in quotes:
                     if buy.venue == sell.venue or buy.ask <= 0 or sell.bid <= 0:
                         continue
-                    gross = (sell.bid / buy.ask - 1) * 100
-                    cost = self.fee_pct * 2 + self.slippage_pct * 2
-                    fresh = max(time.time() - buy.timestamp, time.time() - sell.timestamp) <= self.max_age_seconds
+                    gross = (sell.bid / buy.ask - 1.0) * 100.0
+                    cost = self.fee_pct * 2.0 + self.slippage_pct * 2.0
+                    age = max(time.time() - buy.timestamp, time.time() - sell.timestamp)
+                    fresh = age <= self.max_age_seconds
                     net = gross - cost
-                    executable = fresh and net > 0
-                    reason = "fresh positive net spread" if executable else ("stale quote" if not fresh else "net spread not positive after estimated costs")
+                    executable = fresh and net > 0.0
+                    if executable:
+                        reason = "fresh positive net spread after estimated costs"
+                    elif not fresh:
+                        reason = "quote freshness check failed"
+                    else:
+                        reason = "spread does not cover estimated fees and slippage"
                     out.append(CrossExchangeOpportunity(symbol, buy.venue, sell.venue, buy.ask, sell.bid, gross, cost, net, executable, reason))
         return sorted(out, key=lambda x: x.net_spread_pct, reverse=True)
+
+    def diagnostics(self, symbols: list[str] | None = None) -> dict:
+        symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        venues: dict[str, int] = {}
+        errors: dict[str, dict[str, str]] = {}
+        for symbol in symbols:
+            quotes = self.provider.collect(symbol)
+            for q in quotes:
+                venues[q.venue] = venues.get(q.venue, 0) + 1
+            if self.provider.last_errors:
+                errors[symbol] = dict(self.provider.last_errors)
+        return {"symbols": symbols, "venue_quotes": venues, "errors": errors}
