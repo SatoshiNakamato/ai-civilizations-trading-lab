@@ -55,15 +55,7 @@ class Agent:
         return Idea(f"{self.archetype}-idea-{tick}-{rng.randrange(1_000_000)}", base, self.agent_id, generation=tick)
 
     def evaluate(self, idea: Idea, validation) -> float:
-        """Score an idea only from real-market verification; no synthetic profitability."""
-        idea.validation_score = validation.score
-        idea.validation_return = validation.total_return
-        idea.validation_drawdown = validation.max_drawdown
-        idea.validation_samples = validation.samples
-        idea.validation_passed = validation.passed
-        idea.validation_source = "real market candles / walk-forward verification"
-        # Ranking score is a bounded transformation of the observed real score.
-        # It does not manufacture a positive result: negative verification remains below 0.5.
+        idea.validation_score = validation.score; idea.validation_return = validation.total_return; idea.validation_drawdown = validation.max_drawdown; idea.validation_samples = validation.samples; idea.validation_passed = validation.passed; idea.validation_source = "real market candles / walk-forward verification"
         idea.fitness = max(0.0, min(1.0, 0.5 + validation.score))
         research_quality = min(1.0, validation.samples / 500.0)
         self.intelligence.learn_from_research(validation.score, research_quality, min(1.0, 0.25 + self.intelligence.creativity / 500.0))
@@ -73,85 +65,70 @@ class Civilization:
     def __init__(self, size: int = 100, seed: int = 42):
         self.rng = Random(seed); self.tick = 0; self.generation = 0
         self.agents: Dict[str, Agent] = {}; self.global_ideas: List[Idea] = []; self.events: List[str] = []
-        self.network = CommunicationNetwork(); self.society = Society()
-        self.research = ResearchDesk(web_collector=PublicWebCollector())
-        self.research_bridge = ResearchBridge(self.research, self.research.web_collector)
-        self.bureau = ResearchBureau(self.research.web_collector)
-        self.evolution = CivilizationEvolution()
-        self.verifier = AlphaVerifier()
-        self._validation_cache: dict[tuple[str,str], object] = {}
+        self.network = CommunicationNetwork(); self.society = Society(); self.research = ResearchDesk(web_collector=PublicWebCollector())
+        self.research_bridge = ResearchBridge(self.research, self.research.web_collector); self.bureau = ResearchBureau(self.research.web_collector)
+        self.evolution = CivilizationEvolution(); self.verifier = AlphaVerifier(); self._validation_cache: dict[tuple[str,str], object] = {}
         self._seed_research(); self._create_population(size)
         for agent in self.agents.values(): self.evolution.specialize(agent.agent_id, self._evolution_role(agent.archetype))
 
     def _evolution_role(self, archetype: str) -> str:
         return {"arb":"arbitrage", "quant":"alpha", "macro":"macro", "momentum":"alpha", "value":"alpha", "contrarian":"skeptic", "risk":"risk", "probability":"validation", "microstructure":"arbitrage", "explorer":"research"}.get(archetype, "research")
-
     def _seed_research(self) -> None:
         self.research.ingest("internal://protocol", "Research protocol", "Hypotheses must be falsifiable. Historical success does not guarantee future returns. Real market data, transaction costs, liquidity, slippage and out-of-sample validation must be considered.")
-
     def _create_population(self, size: int) -> None:
         for i in range(size):
             key, role = ARCHETYPES[i % len(ARCHETYPES)]; sex = "female" if i % 2 else "male"
             self.agents[f"A{i+1:03d}"] = Agent(f"A{i+1:03d}", f"{role} {i+1:03d}", key, sex, self.rng.random(), self.rng.random(), self.rng.random())
-
     def _research_query(self, agent: Agent) -> str:
         return {"quant":"statistical out-of-sample","arb":"price discrepancy transaction costs","macro":"macro economic regime","momentum":"price persistence liquidity","value":"fair value valuation","contrarian":"crowded positioning reversal","risk":"volatility correlation drawdown","probability":"probability forecast calibration","microstructure":"market liquidity spread order flow","explorer":"falsifiable hypothesis validation"}[agent.archetype]
-
     def _market_test(self, agent: Agent):
-        # Use a deterministic mapping so identical archetypes share the same
-        # real-data validation in a generation, avoiding 100 redundant API calls.
         symbol = {"arb":"BTCUSDT", "quant":"BTCUSDT", "macro":"ETHUSDT", "momentum":"SOLUSDT", "value":"ETHUSDT", "contrarian":"SOLUSDT", "risk":"BTCUSDT", "probability":"ETHUSDT", "microstructure":"BTCUSDT", "explorer":"SOLUSDT"}[agent.archetype]
         interval = {"macro":"4h", "momentum":"1h", "contrarian":"15m"}.get(agent.archetype, "4h")
         key = (symbol, interval)
-        if key not in self._validation_cache:
-            self._validation_cache[key] = self.verifier.verify(symbol, interval, 500)
+        if key not in self._validation_cache: self._validation_cache[key] = self.verifier.verify(symbol, interval, 500)
         return self._validation_cache[key]
-
     def step(self) -> dict:
         self.tick += 1; self._validation_cache.clear(); proposals = []
         for agent in self.agents.values():
-            query = self._research_query(agent)
-            self.bureau.submit_question(agent.agent_id, query, agent.curiosity)
-            context = self.research_bridge.build_context(agent.agent_id, query, limit=3)
-            idea = agent.observe_and_propose(self.tick, self.rng, context)
-            validation = self._market_test(agent)
-            agent.evaluate(idea, validation); agent.ideas.append(idea); self.global_ideas.append(idea)
-            self.evolution.record_prediction(agent.agent_id, idea.validation_source, idea.thesis, validation.score, min(1.0, 0.2 + agent.curiosity * 0.8), validation.samples)
+            query = self._research_query(agent); self.bureau.submit_question(agent.agent_id, query, agent.curiosity)
+            context = self.research_bridge.build_context(agent.agent_id, query, limit=3); idea = agent.observe_and_propose(self.tick, self.rng, context)
+            validation = self._market_test(agent); agent.evaluate(idea, validation); agent.ideas.append(idea); self.global_ideas.append(idea)
+            symbol = {"arb":"BTCUSDT", "quant":"BTCUSDT", "macro":"ETHUSDT", "momentum":"SOLUSDT", "value":"ETHUSDT", "contrarian":"SOLUSDT", "risk":"BTCUSDT", "probability":"ETHUSDT", "microstructure":"BTCUSDT", "explorer":"SOLUSDT"}[agent.archetype]
+            interval = {"macro":"4h", "momentum":"1h", "contrarian":"15m"}.get(agent.archetype, "4h")
+            self.evolution.record_prediction(agent.agent_id, symbol, idea.thesis, validation.score, min(1.0, 0.2 + agent.curiosity * 0.8), validation.samples, interval)
             self.society.record_knowledge(f"{agent.archetype}:{idea.title}", idea.thesis, agent.agent_id, idea.fitness, self.generation)
-            self.evolution.publish(agent.agent_id, agent.archetype, idea.thesis, [s.get("url", "") for s in context.get("sources", [])])
-            proposals.append(idea)
+            self.evolution.publish(agent.agent_id, agent.archetype, idea.thesis, [s.get("url", "") for s in context.get("sources", [])]); proposals.append(idea)
+        # Resolve previous unresolved strategy predictions against a fresh real verification snapshot.
+        resolved = self.evolution.resolve_real_validation(self._validation_cache, min_samples=200, tolerance=0.02)
         champions = rank_ideas(proposals)[:20]
         for idea in champions:
             for peer in self._sample_peers(idea.origin, 3):
                 sender = self.agents[idea.origin]; kind = "endorse" if peer.cooperation >= 0.5 else "challenge"
                 message = f"{kind}: {idea.title}; real_score={idea.validation_score:.4f}; return={idea.validation_return:.4f}; drawdown={idea.validation_drawdown:.4f}; passed={idea.validation_passed}"
-                self.network.send(sender.agent_id, peer.agent_id, kind, message, self.tick)
-                useful = 0.75 if kind == "endorse" else 0.85; self.society.talk(self.generation, sender.agent_id, peer.agent_id, idea.title, message, useful); sender.intelligence.learn_from_collaboration(useful)
+                self.network.send(sender.agent_id, peer.agent_id, kind, message, self.tick); useful = 0.75 if kind == "endorse" else 0.85
+                self.society.talk(self.generation, sender.agent_id, peer.agent_id, idea.title, message, useful); sender.intelligence.learn_from_collaboration(useful)
                 if kind == "endorse": self.society.confirm(idea.title)
                 else: self.society.challenge(idea.title)
                 idx = self._knowledge_index(idea.thesis)
                 if idx is not None: self.evolution.challenge(idx, kind == "endorse")
                 self.network.update_reputation(sender.agent_id, 0.01 if idea.validation_passed else -0.005)
-        self.generation += 1; self.bureau.generation = self.generation; self.evolution.evolve(self.agents.values()); self.events.append(f"tick={self.tick}: {len(proposals)} hypotheses validated against real market data; synthetic idea fitness disabled; generation evolved"); self.events = self.events[-100:]
+        self.generation += 1; self.bureau.generation = self.generation; evolution_state = self.evolution.evolve(self.agents.values())
+        self.events.append(f"tick={self.tick}: real validation complete; resolved={resolved}; synthetic fitness disabled; generation evolved"); self.events = self.events[-100:]
         return self.snapshot()
-
     def _knowledge_index(self, thesis: str):
-        for i in range(len(self.evolution.knowledge) - 1, -1, -1):
+        for i in range(len(self.evolution.knowledge)-1,-1,-1):
             if self.evolution.knowledge[i].claim == thesis: return i
         return None
-
     def _sample_peers(self, origin: str, count: int):
-        pool = [a for aid,a in self.agents.items() if aid != origin]; self.rng.shuffle(pool); return pool[:count]
-
+        pool=[a for aid,a in self.agents.items() if aid != origin]; self.rng.shuffle(pool); return pool[:count]
     def snapshot(self) -> dict:
-        top = sorted(self.global_ideas, key=lambda x:x.fitness, reverse=True)[:10]; best_agents = sorted(self.agents.values(), key=lambda a:a.intelligence.capability_score, reverse=True)[:10]
+        top=sorted(self.global_ideas,key=lambda x:(x.validation_passed,x.fitness),reverse=True)[:10]; best_agents=sorted(self.agents.values(),key=lambda a:a.intelligence.capability_score,reverse=True)[:10]
         return {"tick":self.tick,"generation":self.generation,"agents":len(self.agents),"ideas":len(self.global_ideas),"messages":len(self.network.memory.messages),"research":self.research.snapshot(),"bureau":self.bureau.snapshot(),"society":self.society.snapshot(),"evolution":self.evolution.snapshot(),"best_agents":[{"id":a.agent_id,"archetype":a.archetype,"capability":round(a.intelligence.capability_score,3),"experience":a.intelligence.experience,"discoveries":a.intelligence.discoveries} for a in best_agents],"top_ideas":[{"title":i.title,"origin":i.origin,"fitness":round(i.fitness,4),"real_score":round(i.validation_score,6),"return":round(i.validation_return,6),"drawdown":round(i.validation_drawdown,6),"samples":i.validation_samples,"passed":i.validation_passed} for i in top],"events":self.events[-20:]}
 
 if __name__ == "__main__":
-    civilization = Civilization(100, 42); print("AI CIVILIZATION ONLINE"); print("======================"); print(f"Population: {len(civilization.agents)}")
+    civilization=Civilization(100,42); print("AI CIVILIZATION ONLINE"); print("======================"); print(f"Population: {len(civilization.agents)}")
     for _ in range(10):
-        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Research findings: {state['bureau']['findings']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Conversations: {state['society']['conversation_count']}"); print(f"Persistent predictions: {state['evolution']['predictions']}"); print(f"Persistent knowledge: {state['evolution']['knowledge']}")
-        if state['best_agents']:
-            a=state['best_agents'][0]; print("Top capability:",a['id'],a['capability'],"experience:",a['experience'])
+        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Research findings: {state['bureau']['findings']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Conversations: {state['society']['conversation_count']}"); print(f"Persistent predictions: {state['evolution']['predictions']}"); print(f"Resolved predictions: {state['evolution']['resolved_predictions']}"); print(f"Leaderboard entries: {len(state['evolution']['leaderboard'])}")
+        if state['best_agents']: a=state['best_agents'][0]; print("Top capability:",a['id'],a['capability'],"experience:",a['experience'])
         if state['top_ideas']:
             i=state['top_ideas'][0]; print("Best idea:",i['title'],"| real score:",i['real_score'],"| return:",i['return'],"| passed:",i['passed'])
