@@ -25,11 +25,11 @@ class ResearchBridge:
         return [
             ResearchInsight(
                 topic=query,
-                source=hit.get("source", "unknown"),
-                excerpt=hit.get("content", "")[:1500],
-                relevance=float(hit.get("relevance", 0.0)),
+                source=document.source,
+                excerpt=document.text[:1500],
+                relevance=1.0,
             )
-            for hit in hits
+            for document in hits
         ]
 
     def build_context(self, agent_id: str, query: str, limit: int = 5) -> dict[str, Any]:
