@@ -6,17 +6,13 @@ from typing import Dict, List
 
 from .communication import CommunicationNetwork
 from .evolution import crossover, evaluate_idea, mutate, rank_ideas
-from .intelligence import DEFAULT_PROFILE, IntelligenceProfile
+from .learning import Intelligence
 
 ARCHETYPES = [
-    ("quant", "Quant Researcher"),
-    ("arb", "Arbitrage Hunter"),
-    ("macro", "Macro Analyst"),
-    ("momentum", "Momentum Trader"),
-    ("value", "Value Researcher"),
-    ("contrarian", "Contrarian"),
-    ("risk", "Risk Manager"),
-    ("probability", "Prediction-Market Analyst"),
+    ("quant", "Quant Researcher"), ("arb", "Arbitrage Hunter"),
+    ("macro", "Macro Analyst"), ("momentum", "Momentum Trader"),
+    ("value", "Value Researcher"), ("contrarian", "Contrarian"),
+    ("risk", "Risk Manager"), ("probability", "Prediction-Market Analyst"),
     ("microstructure", "Market Microstructure Specialist"),
     ("explorer", "Strategy Explorer"),
 ]
@@ -41,7 +37,7 @@ class Agent:
     risk_tolerance: float
     curiosity: float
     cooperation: float
-    intelligence: IntelligenceProfile = field(default_factory=lambda: DEFAULT_PROFILE)
+    intelligence: Intelligence = field(default_factory=Intelligence)
     ideas: List[Idea] = field(default_factory=list)
     wealth_score: float = 0.0
     reputation: float = 0.0
@@ -60,16 +56,17 @@ class Agent:
             "microstructure": "Study spreads, liquidity and order-flow dynamics.",
             "explorer": "Combine two unrelated signals into a falsifiable hypothesis.",
         }
-        return Idea(
-            title=f"{self.archetype}-idea-{tick}-{rng.randrange(1_000_000)}",
-            thesis=themes[self.archetype],
-            origin=self.agent_id,
-            generation=tick,
-        )
+        return Idea(f"{self.archetype}-idea-{tick}-{rng.randrange(1_000_000)}",
+                    themes[self.archetype], self.agent_id, generation=tick)
 
     def evaluate(self, idea: Idea, rng: Random) -> float:
         result = evaluate_idea(idea, rng)
         idea.fitness = result.score
+        self.intelligence.learn_from_research(
+            quality=idea.fitness,
+            difficulty=min(1.0, 0.35 + self.curiosity * 0.65),
+            novelty=min(1.0, 0.25 + self.intelligence.creativity / 500.0),
+        )
         return idea.fitness
 
 
@@ -86,23 +83,18 @@ class Civilization:
 
     def _create_population(self, size: int) -> None:
         for i in range(size):
-            archetype_key, role = ARCHETYPES[i % len(ARCHETYPES)]
+            key, role = ARCHETYPES[i % len(ARCHETYPES)]
             sex = "female" if i % 2 else "male"
             self.agents[f"A{i + 1:03d}"] = Agent(
-                agent_id=f"A{i + 1:03d}",
-                name=f"{role} {i + 1:03d}",
-                archetype=archetype_key,
-                sex=sex,
-                risk_tolerance=self.rng.random(),
-                curiosity=self.rng.random(),
+                agent_id=f"A{i + 1:03d}", name=f"{role} {i + 1:03d}",
+                archetype=key, sex=sex,
+                risk_tolerance=self.rng.random(), curiosity=self.rng.random(),
                 cooperation=self.rng.random(),
             )
 
     def step(self) -> dict:
         self.tick += 1
         proposals = []
-
-        # Each citizen researches independently, then enters the social loop.
         for agent in self.agents.values():
             idea = agent.observe_and_propose(self.tick, self.rng)
             agent.evaluate(idea, self.rng)
@@ -112,31 +104,23 @@ class Civilization:
 
         ranked = rank_ideas(proposals)
         champions = ranked[:20]
-
-        # Champions are debated by randomly selected peers.
         for idea in champions:
             peers = self._sample_peers(idea.origin, 3)
             for peer in peers:
                 sender = self.agents[idea.origin]
                 kind = "endorse" if peer.cooperation >= 0.5 else "challenge"
-                content = (
-                    f"{kind}: {idea.title}; thesis={idea.thesis}; "
-                    f"fitness={idea.fitness:.3f}"
+                self.network.send(sender.agent_id, peer.agent_id, kind,
+                                  f"{kind}: {idea.title}; thesis={idea.thesis}; fitness={idea.fitness:.3f}", self.tick)
+                sender.intelligence.learn_from_collaboration(
+                    0.75 if kind == "endorse" else 0.85
                 )
-                self.network.send(sender.agent_id, peer.agent_id, kind, content, self.tick)
-                self.network.update_reputation(
-                    sender.agent_id,
-                    0.01 if idea.fitness >= 0.6 else -0.005,
-                )
-
-                # High-quality ideas can mutate or recombine inside the population.
+                self.network.update_reputation(sender.agent_id, 0.01 if idea.fitness >= 0.6 else -0.005)
                 if idea.fitness >= 0.55 and self.rng.random() < peer.curiosity:
                     child = mutate(idea, peer, self.rng)
                     peer.evaluate(child, self.rng)
                     peer.ideas.append(child)
                     self.global_ideas.append(child)
 
-        # Crossover between strong ideas creates a second research path.
         if len(champions) >= 2:
             for peer in self._sample_peers("__council__", 5):
                 child = crossover(champions[0], champions[1], peer, self.rng)
@@ -146,8 +130,8 @@ class Civilization:
 
         self.generation += 1
         self.events.append(
-            f"tick={self.tick}: {len(proposals)} hypotheses; "
-            f"{len(champions)} debated; mutation/crossover produced new candidates"
+            f"tick={self.tick}: {len(proposals)} hypotheses; {len(champions)} debated; "
+            f"mutation/crossover produced new candidates"
         )
         self.events = self.events[-100:]
         return self.snapshot()
@@ -159,12 +143,20 @@ class Civilization:
 
     def snapshot(self) -> dict:
         top = sorted(self.global_ideas, key=lambda x: x.fitness, reverse=True)[:10]
+        best_agents = sorted(self.agents.values(), key=lambda a: a.intelligence.capability_score, reverse=True)[:10]
         return {
             "tick": self.tick,
             "generation": self.generation,
             "agents": len(self.agents),
             "ideas": len(self.global_ideas),
             "messages": len(self.network.memory.messages),
+            "best_agents": [
+                {"id": a.agent_id, "archetype": a.archetype,
+                 "capability": round(a.intelligence.capability_score, 3),
+                 "experience": a.intelligence.experience,
+                 "discoveries": a.intelligence.discoveries}
+                for a in best_agents
+            ],
             "top_ideas": [
                 {"title": i.title, "origin": i.origin, "fitness": round(i.fitness, 4), "generation": i.generation}
                 for i in top
@@ -183,6 +175,10 @@ if __name__ == "__main__":
         print(f"\nGeneration {state['generation']}")
         print(f"Ideas discovered: {state['ideas']}")
         print(f"Messages: {state['messages']}")
+        if state["best_agents"]:
+            best_agent = state["best_agents"][0]
+            print("Top capability:", best_agent["id"], best_agent["capability"],
+                  "experience:", best_agent["experience"])
         if state["top_ideas"]:
             best = state["top_ideas"][0]
             print("Best idea:", best["title"], "| fitness:", best["fitness"])
