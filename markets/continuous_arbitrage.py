@@ -26,8 +26,6 @@ class ContinuousArbitrage:
         self.cycle_count += 1
         opened = 0
         closed = 0
-
-        # Give each strategy agent a chance to discover a distinct opportunity.
         for agent in self.agents:
             if len(self.open_by_agent[agent]) >= self.max_open_per_agent:
                 continue
@@ -35,10 +33,7 @@ class ContinuousArbitrage:
             if fill is not None:
                 self.open_by_agent[agent].append(fill.fill_id)
                 opened += 1
-
-        # Refresh public quotes and close paper positions when their current spread
-        # has converged enough to be realized. The scanner feed is reused here.
-        if self.open_by_agent:
+        if any(self.open_by_agent.values()) and hasattr(self.runtime, "scanner"):
             quotes = self.runtime.scanner.feed.snapshot()
             for agent, fill_ids in self.open_by_agent.items():
                 for fill_id in list(fill_ids):
@@ -50,14 +45,12 @@ class ContinuousArbitrage:
                     if fill.buy_venue not in venues or fill.sell_venue not in venues:
                         continue
                     buy, sell = venues[fill.buy_venue], venues[fill.sell_venue]
-                    # Close when the current spread has materially converged.
                     current_spread = sell.bid - buy.ask
                     entry_spread = fill.entry_sell - fill.entry_buy
                     if current_spread <= entry_spread * 0.35:
                         self.runtime.close(fill_id, quotes)
                         fill_ids.remove(fill_id)
                         closed += 1
-
         snap = self.runtime.snapshot()
         return CycleResult(self.cycle_count, opened, closed, snap["paper"]["realized_pnl"], self.runtime.leaderboard.profitable(3))
 
