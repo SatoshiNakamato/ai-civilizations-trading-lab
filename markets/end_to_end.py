@@ -12,34 +12,53 @@ from civilizations.alert_gate import AlertGate
 from civilizations.cycle_telemetry import CycleTelemetry
 from civilizations.autonomous_research import AutonomousResearchEngine
 from civilizations.ticker_brain import TickerBrain
+from civilizations.email_alerts import AlertCandidate, EmailAlertGateway
 
 @dataclass
 class LifecycleEvent:
     cycle: int; stage: str; agent: str; status: str; payload: dict; created_at: float
 
 class TradingCivilizationV1:
-    """Continuous research, debate, risk-gated token-launch civilization.
+    """Continuous multi-agent research, paper arbitrage and alert pipeline.
 
-    A001-A004 are the only execution identities. Their Bankr keys are read
-    exclusively from host environment variables and are never persisted.
-    The Bankr integration is limited to token launches; this class exposes no
-    wallet transfer/withdraw/signing operation.
+    The 100-agent civilization researches and debates ideas every cycle. High-
+    quality alpha candidates and validated cross-venue arbitrage opportunities
+    are attributed to their source agents and sent through the existing
+    opt-in email gateway. Bankr remains isolated from the research/alert path.
     """
     EXECUTORS = ("A001", "A002", "A003", "A004")
+
     def __init__(self, runtime=None, agents=None, data_dir="data/civilization"):
         self.data_dir=data_dir; os.makedirs(data_dir, exist_ok=True); self.runtime=runtime
         self.agents=agents or [f"A{i:03d}" for i in range(1,101)]
-        self.arbitrage=ContinuousArbitrage(runtime=runtime, agents=self.agents) if runtime else None
+        self.arbitrage=ContinuousArbitrage(runtime=runtime, agents=self.agents) if runtime else ContinuousArbitrage(agents=self.agents)
         self.audit=AuditLog(os.path.join(data_dir,"lifecycle.jsonl")); self.portfolio=Portfolio(); self.metrics=StrategyMetrics()
-        self.risk=RiskGovernor(); self.alerts=AlertGate(); self.research=AutonomousResearchEngine(); self.tickers=TickerBrain()
+        self.risk=RiskGovernor(); self.alerts=AlertGate(); self.email=EmailAlertGateway(); self.research=AutonomousResearchEngine(); self.tickers=TickerBrain()
         self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl")); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
+
+    def _send_alpha_alerts(self, opportunities):
+        sent = 0
+        for o in opportunities[:3]:
+            h=o.hypothesis
+            confidence=min(0.99, h.evidence * .75 + o.debate.survival_score * .25)
+            edge=max(0.0, o.risk_adjusted - .60)
+            candidate=AlertCandidate(
+                title=f"{h.ticker} alpha candidate",
+                category="alpha-token",
+                summary=(f"Agent {h.agent} produced a high-ranked {h.ticker} hypothesis: {h.thesis}. "
+                         f"Risk-adjusted score={o.risk_adjusted:.3f}; evidence={o.evidence_score:.3f}; "
+                         f"debate survival={o.debate.survival_score:.3f}."),
+                confidence=confidence, edge=edge, risk=h.risk,
+                sources=tuple(getattr(h, "sources", ()) or ()), agent=h.agent,
+            )
+            if self.email.send(candidate):
+                sent += 1
+        return sent
 
     def cycle(self):
         self.cycle_count += 1
         telemetry=CycleTelemetry(self.cycle_count,len(self.agents))
         print(f"CYCLE {self.cycle_count} START agents={len(self.agents)}",flush=True)
-        # Pass the integer cycle counter. Passing self.cycle (the bound method)
-        # causes downstream arithmetic such as cycle * 3 to fail at runtime.
         opportunities=self.research.cycle(self.agents,self.cycle_count)
         top=opportunities[:3]
         for o in top:
@@ -51,10 +70,23 @@ class TradingCivilizationV1:
         telemetry.stage("hypotheses","ok",len(opportunities),"independent hypotheses generated")
         telemetry.stage("debate","ok",len(opportunities),"adversarial challenge pass executed")
         telemetry.stage("evidence","ok",len(top),"evidence scoring completed")
+
+        alpha_alerts=self._send_alpha_alerts(top)
+        telemetry.stage("alerts","ok",alpha_alerts,"high-value alpha alerts delivered")
+
+        arb_result=None
+        try:
+            arb_result=self.arbitrage.cycle()
+            if arb_result.opened or arb_result.closed:
+                self._event("arbitrage","SYSTEM","cycle",asdict(arb_result))
+            telemetry.stage("arbitrage","ok",arb_result.opened,"live public quotes scanned; paper fills only")
+        except Exception as exc:
+            self._event("arbitrage","SYSTEM","error",{"error":f"{type(exc).__name__}: {exc}"})
+            telemetry.stage("arbitrage","error",0,"arbitrage scan unavailable; research pipeline continued")
+
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]
-        # At most one launch per cycle across all four credentials.
         for o in execution[:1]:
             agent=o.hypothesis.agent; ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
@@ -74,9 +106,9 @@ class TradingCivilizationV1:
         telemetry.stage("on_chain_observation","pending" if deployments else "idle",len(deployments),"launches queued for observation")
         telemetry.stage("pnl","ok",0,"portfolio accounting available")
         telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
-        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot()}
+        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot(),"alerts":{"email":self.email.snapshot(),"alpha_sent":alpha_alerts},"arbitrage":asdict(arb_result) if arb_result else None}
         result["telemetry"]=telemetry.snapshot(); self._event("cycle","SYSTEM","completed",result); telemetry.log(); return result
 
     def _event(self,stage,agent,status,payload): self.audit.append("lifecycle",**asdict(LifecycleEvent(self.cycle_count,stage,agent,status,payload,time.time())))
     def snapshot(self):
-        return {"cycles":self.cycle_count,"agents":len(self.agents),"arbitrage":self.arbitrage.snapshot() if self.arbitrage else None,"research":self.research.snapshot(),"portfolio":self.portfolio.snapshot(),"risk":{"exposure":self.risk.exposure,"daily_pnl":self.risk.daily_pnl,"halted":self.risk.halted},"bankr":self.bankr.snapshot()}
+        return {"cycles":self.cycle_count,"agents":len(self.agents),"arbitrage":self.arbitrage.snapshot() if self.arbitrage else None,"research":self.research.snapshot(),"portfolio":self.portfolio.snapshot(),"risk":{"exposure":self.risk.exposure,"daily_pnl":self.risk.daily_pnl,"halted":self.risk.halted},"bankr":self.bankr.snapshot(),"alerts":{"email":self.email.snapshot()}}
