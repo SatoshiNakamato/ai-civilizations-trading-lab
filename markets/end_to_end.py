@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 import os, time
 from markets.audit_log import AuditLog
 from markets.continuous_arbitrage import ContinuousArbitrage
@@ -42,7 +42,7 @@ class TradingCivilizationV1:
         for o in top:
             h=o.hypothesis
             self._event("research",h.agent,"produced",{"ticker":h.ticker,"hypothesis_id":h.hypothesis_id,"score":h.score,"thesis":h.thesis})
-            self._event("debate",h.agent,"challenged",asdict(o.debate)); self._event("evidence",h.agent,"verified",{"score":o.evidence_score})
+            self._event("debate",h.agent,"challenged",self._as_payload(o.debate)); self._event("evidence",h.agent,"verified",{"score":o.evidence_score})
             self._event("ranking",h.agent,"ranked",{"risk_adjusted":o.risk_adjusted})
         telemetry.stage("research","ok",len(self.agents),"public-data-aware autonomous research executed")
         last_signals=getattr(self.research,"last_signals",())
@@ -105,6 +105,10 @@ class TradingCivilizationV1:
         telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
         result={"cycle":self.cycle_count,"signals":len(last_signals),"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"launch_intents":intents,"bankr_plans":bankr_plans,"execution_intents":deployments,"portfolio":self.portfolio.snapshot()}
         result["telemetry"]=telemetry.snapshot(); self._event("cycle","SYSTEM","completed",result); telemetry.log(); return result
+
+    @staticmethod
+    def _as_payload(value):
+        return asdict(value) if is_dataclass(value) else dict(vars(value)) if hasattr(value,"__dict__") else value
 
     def _event(self,stage,agent,status,payload): self.audit.append("lifecycle",**asdict(LifecycleEvent(self.cycle_count,stage,agent,status,payload,time.time())))
     def snapshot(self):
