@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +26,12 @@ def main() -> int:
     if not gateway.enabled():
         print("SMTP configuration is not loaded")
         return 2
+
+    # Never send a real email from CI. Set CIVILIZATION_EMAIL_SMOKE_TEST=1
+    # explicitly when a human wants this script to perform the SMTP smoke test.
+    if os.getenv("CI") and os.getenv("CIVILIZATION_EMAIL_SMOKE_TEST") != "1":
+        print("CI environment detected; SMTP smoke test skipped")
+        return 0
 
     try:
         ok = gateway.send(candidate)
