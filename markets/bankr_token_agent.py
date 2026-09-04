@@ -23,6 +23,7 @@ class TokenPlan:
     token_address: str = ""
     tx_hash: str = ""
     created_at: float = 0.0
+    risk: float = 0.0
 
 @dataclass
 class BankrAuthResult:
@@ -38,7 +39,7 @@ class BankrTokenAgent:
 
     Keys stay in the host environment. Execution identities may research and
     author launches independently, but the free-tier allowance is a single
-    shared budget: at most three successful launches in any rolling 24-hour
+    shared budget: at most three counted launch attempts in any rolling 24-hour
     window. The quota gate is automatic and serialized across workers.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
@@ -133,10 +134,10 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count all successful launches in the shared rolling 24h budget.
+        """Count counted launch attempts in the shared rolling 24h budget.
 
         ``agent`` is retained only for API compatibility. It is intentionally
-        ignored because the free-tier limit is shared, not per agent/key.
+        ignored because the free-tier limit is shared by this application.
         """
         now = time.time() if now is None else now
         cutoff = now - 86400
@@ -146,7 +147,7 @@ class BankrTokenAgent:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") != "deployed":
+                    if item.get("status") not in {"deployed", "attempted"}:
                         continue
                     if float(item.get("created_at", 0)) >= cutoff:
                         count += 1
@@ -161,7 +162,7 @@ class BankrTokenAgent:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") != "deployed":
+                    if item.get("status") not in {"deployed", "attempted"}:
                         continue
                     latest = max(latest, float(item.get("created_at", 0)))
         except OSError:
@@ -180,10 +181,10 @@ class BankrTokenAgent:
             time.sleep(remaining)
         return lock_handle
 
-    def plan(self, agent, name, symbol, thesis, score, chain="robinhood"):
+    def plan(self, agent, name, symbol, thesis, score, chain="robinhood", risk=0.0):
         chain = chain.lower()
         if chain not in {"base", "robinhood"}: raise ValueError("Bankr token launch chain must be base or robinhood")
-        plan = TokenPlan(agent.upper(), name[:100], self.normalize_symbol(symbol), chain, thesis[:500], float(score), created_at=time.time())
+        plan = TokenPlan(agent.upper(), name[:100], self.normalize_symbol(symbol), chain, thesis[:500], float(score), risk=float(risk), created_at=time.time())
         self._audit(plan); return plan
 
     def simulate(self, plan: TokenPlan):
@@ -200,23 +201,32 @@ class BankrTokenAgent:
         if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip():
             raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
 
-        # Serialize quota check + deployment. This is a GLOBAL free-tier gate.
         lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
             used = self.deployments_today()
             if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
                 raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
             headers = {"Content-Type": "application/json", "Accept": "application/json", **self._auth_headers(key)}
             req = urllib.request.Request(self.ENDPOINT, data=json.dumps(payload_obj).encode(), headers=headers, method="POST")
+            # Reserve the local shared slot before the write. Bankr counts an
+            # attempt once metadata pinning begins, even if deployment later fails.
+            attempt = TokenPlan(**asdict(plan)); attempt.status = "attempted"; attempt.created_at = time.time(); self._audit(attempt)
             try:
                 with urllib.request.urlopen(req, timeout=45) as response: body = json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
                 raise RuntimeError(f"Bankr deployment failed: {self._error_detail(exc)}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
+
+            # A live request must return a broadcast transaction. This guards
+            # against accidentally wiring the simulation path to production.
+            if body.get("simulated") is True or not body.get("txHash", body.get("tx_hash", "")):
+                raise RuntimeError("Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast")
+
             result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time()
             result.token_address = str(body.get("tokenAddress", body.get("token_address", "")))
             result.tx_hash = str(body.get("txHash", body.get("tx_hash", "")))
