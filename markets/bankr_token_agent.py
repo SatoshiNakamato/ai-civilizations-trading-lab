@@ -214,7 +214,10 @@ class BankrTokenAgent:
         try:
             used = self.deployments_today()
             if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY: raise RuntimeError(f"Bankr local success quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
-            payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
+            # Do not send simulateOnly at all for a live deployment. Bankr's API
+            # defaults this field to false; omitting it avoids integrations or
+            # gateways that incorrectly coerce an explicit false into simulation.
+            payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
             headers = {"Content-Type": "application/json", "Accept": "application/json", **self._auth_headers(key)}
