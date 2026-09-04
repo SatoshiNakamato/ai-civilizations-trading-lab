@@ -3,12 +3,11 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
-- Continuous hosted worker observability and recovery improvements.
-- Autonomous research/debate/verification/ranking/risk/deployment/observation/P&L pipeline hardening.
-- Autonomous creative ticker selection with recent Bankr launch collision checks.
-- A001-A004 autonomous Bankr token-launch execution on Robinhood Chain or Base when `BANKR_LIVE_DEPLOY=1` is enabled.
-- Bankr rolling launch-quota enforcement and deployment audit tracking.
-- Least-privilege Bankr integration guidance: token-launch capability enabled without wallet transfer/sign/submit access.
+- Release-readiness analytics: deterministic paper-trading ledger with duplicate protection and validation.
+- Walk-forward out-of-sample backtest validation with drawdown and Sharpe-like metrics.
+- Opportunity, agent, and category attribution for paper outcomes.
+- Lightweight dependency-free monitoring snapshot and local dashboard renderer.
+- Bankr/live execution remains isolated and can be enabled later as a separate operational decision.
 
 ## [0.1.0] - 2026-09-04
 ### Added
