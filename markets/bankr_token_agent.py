@@ -42,16 +42,20 @@ class BankrAuthResult:
 
 
 class BankrTokenAgent:
-    """Bankr integration with safe dry-run default.
+    """Bankr token-launch execution layer.
 
-    Each execution agent maps to its own local Bankr API-key environment variable.
-    Credentials are never stored in the repository or exposed to research agents.
-    Live deployment remains opt-in via BANKR_LIVE_DEPLOY=1.
+    A001-A004 are the only agents allowed to use the four configured keys.
+    The application never stores keys in Git. For production, each Bankr key
+    should have token-launch enabled while wallet write access remains disabled.
+
+    Live deployment is opt-in through BANKR_LIVE_DEPLOY=1. The hosted worker
+    can therefore run continuously without broadcasting until the operator
+    explicitly enables live launch execution.
     """
 
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
-    # Documented read-only wallet identity endpoint. It never creates or deploys.
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
+    LAUNCHES_ENDPOINT = "https://api.bankr.bot/token-launches"
 
     def __init__(self, audit_path="data/bankr_token_plans.jsonl", live=None):
         self.audit_path = audit_path
@@ -79,13 +83,11 @@ class BankrTokenAgent:
         return {agent: bool(os.getenv(env_name)) for agent, env_name in AGENT_BANKR_KEYS.items()}
 
     def verify_agent(self, agent: str, timeout: int = 20) -> BankrAuthResult:
-        """Verify one Bankr user API key without creating or deploying anything."""
         agent = agent.upper()
         env_name = self.credential_env(agent)
         key = os.getenv(env_name)
         if not key:
             return BankrAuthResult(agent, False, False, error=f"{env_name} is not configured")
-
         request = urllib.request.Request(
             self.AUTH_ENDPOINT,
             headers={"Accept": "application/json", "X-API-Key": key},
@@ -98,44 +100,39 @@ class BankrTokenAgent:
                     body = json.loads(raw)
                 except json.JSONDecodeError:
                     body = {}
-
-                # /wallet/me documents the EVM address as either evmAddress or
-                # in wallets[].address. Keep parsing tolerant of both shapes.
                 address = str(body.get("evmAddress", ""))
                 if not address:
                     for wallet in body.get("wallets", []) or []:
                         if str(wallet.get("chain", "")).lower() == "evm":
                             address = str(wallet.get("address", ""))
                             break
-
-                return BankrAuthResult(
-                    agent,
-                    True,
-                    200 <= response.status < 300,
-                    status_code=response.status,
-                    account_address=address,
-                )
+                return BankrAuthResult(agent, True, 200 <= response.status < 300,
+                                       status_code=response.status, account_address=address)
         except urllib.error.HTTPError as exc:
-            # Do not include response body: it can contain account/security details.
-            return BankrAuthResult(
-                agent, True, False, status_code=exc.code, error=f"HTTP {exc.code}"
-            )
+            return BankrAuthResult(agent, True, False, status_code=exc.code, error=f"HTTP {exc.code}")
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return BankrAuthResult(
-                agent, True, False, error=f"{type(exc).__name__}: {exc}"
-            )
+            return BankrAuthResult(agent, True, False, error=f"{type(exc).__name__}: {exc}")
 
     def verify_all_agents(self, timeout: int = 20) -> list[BankrAuthResult]:
         return [self.verify_agent(agent, timeout=timeout) for agent in AGENT_BANKR_KEYS]
 
-    def plan(self, agent, name, symbol, thesis, score, chain="base"):
+    def recent_symbols(self, timeout: int = 10) -> set[str]:
+        """Fetch public Bankr launches so the ticker brain can avoid collisions."""
+        request = urllib.request.Request(self.LAUNCHES_ENDPOINT, headers={"Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode())
+            launches = body.get("launches", body if isinstance(body, list) else [])
+            return {self.normalize_symbol(x.get("tokenSymbol", "")) for x in launches if isinstance(x, dict)}
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError):
+            return set()
+
+    def plan(self, agent, name, symbol, thesis, score, chain="robinhood"):
         chain = chain.lower()
         if chain not in {"base", "robinhood"}:
             raise ValueError("Bankr token launch chain must be base or robinhood")
-        plan = TokenPlan(
-            agent.upper(), name[:100], self.normalize_symbol(symbol), chain,
-            thesis[:500], float(score), created_at=time.time()
-        )
+        plan = TokenPlan(agent.upper(), name[:100], self.normalize_symbol(symbol), chain,
+                         thesis[:500], float(score), created_at=time.time())
         self._audit(plan)
         return plan
 
@@ -152,25 +149,34 @@ class BankrTokenAgent:
         key = os.getenv(env_name)
         if not key:
             raise RuntimeError(f"{env_name} is required for live deployment")
-        payload = json.dumps({
+
+        payload_obj = {
             "tokenName": plan.name,
             "tokenSymbol": plan.symbol,
             "description": plan.thesis,
             "chain": plan.chain,
             "quoteOnlyFees": True,
             "simulateOnly": False,
-        }).encode()
+        }
+        fee_recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
+        if fee_recipient:
+            payload_obj["feeRecipient"] = {"type": "wallet", "value": fee_recipient}
+
+        payload = json.dumps(payload_obj).encode()
         request = urllib.request.Request(
             self.ENDPOINT,
             data=payload,
-            headers={"Content-Type": "application/json", "X-API-Key": key},
+            headers={"Content-Type": "application/json", "Accept": "application/json", "X-API-Key": key},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=45) as response:
                 body = json.loads(response.read().decode())
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"Bankr deployment failed: HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
+
         result = TokenPlan(**asdict(plan))
         result.status = "deployed"
         result.token_address = str(body.get("tokenAddress", body.get("token_address", "")))
