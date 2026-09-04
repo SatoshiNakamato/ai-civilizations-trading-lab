@@ -12,6 +12,7 @@ from .you_mcp import YouMCPResearch
 from .email_alerts import AlertCandidate, EmailAlertGateway
 from .opportunities import Opportunity, OpportunityEngine
 from .research_budget import ResearchBudget
+from markets.bankr_token_agent import BankrTokenAgent
 
 @dataclass
 class ResearchRuntimeStats:
@@ -19,16 +20,18 @@ class ResearchRuntimeStats:
     retried:int=0; fallback_calls:int=0; cache_hits:int=0; provider_calls:int=0
     promoted:int=0; rejected:int=0; contradictions:int=0; alerts_sent:int=0
     opportunities_discovered:int=0; opportunities_validated:int=0; opportunities_rejected:int=0
+    bankr_launches:int=0; bankr_failures:int=0
 
 class ResearchRuntime:
     """Fault-tolerant, budgeted research layer around the civilization loop."""
-    def __init__(self,civilization: Civilization|None=None,researcher: YouMCPResearch|None=None,fallback: DuckDuckGoFallback|None=None,alerts: EmailAlertGateway|None=None,opportunities: OpportunityEngine|None=None,budget: ResearchBudget|None=None):
+    def __init__(self,civilization: Civilization|None=None,researcher: YouMCPResearch|None=None,fallback: DuckDuckGoFallback|None=None,alerts: EmailAlertGateway|None=None,opportunities: OpportunityEngine|None=None,budget: ResearchBudget|None=None,bankr: BankrTokenAgent|None=None):
         self.civilization=civilization or Civilization(); self.coordinator=ResearchCoordinator()
         self.researcher=researcher or YouMCPResearch(); self.fallback=fallback or DuckDuckGoFallback()
         self.knowledge_graph=KnowledgeGraph(); self.quality=ResearchQuality(); self.contradictions=ContradictionDetector()
         self.alerts=alerts or EmailAlertGateway(); self.opportunities=opportunities or OpportunityEngine()
         self.budget=budget or ResearchBudget(daily_limit=self.researcher.daily_limit, arbitrage_limit=min(50, self.researcher.daily_limit))
-        self.stats=ResearchRuntimeStats(); self.failures=[]; self.alert_candidates=[]; self.opportunity_candidates=[]; self.started_at=time()
+        self.bankr=bankr or BankrTokenAgent()
+        self.stats=ResearchRuntimeStats(); self.failures=[]; self.alert_candidates=[]; self.opportunity_candidates=[]; self.bankr_launches=[]; self.started_at=time()
 
     def queue_agent_requests(self):
         before_count=len(self.coordinator.tasks)
@@ -59,9 +62,6 @@ class ResearchRuntime:
             results=self.researcher.search(task.question); self.stats.provider_calls+=1; return results,'you.com'
         except Exception:
             self.stats.retried+=1
-            # A retry is a second provider request, so it needs its own
-            # category budget reservation. If the allocation is exhausted,
-            # fall back instead of silently exceeding the 50/50 policy.
             if not self.budget.reserve(task.topic): return self._fallback(task)
             try:
                 results=self.researcher.search(task.question+' latest'); self.stats.provider_calls+=1; return results,'you.com-retry'
@@ -70,7 +70,6 @@ class ResearchRuntime:
 
     @staticmethod
     def _estimated_edge(text: str) -> float:
-        """Extract an explicit percentage spread from source text; otherwise 0."""
         matches = re.findall(r'(?:spread|edge|difference|mispricing)[^%]{0,80}(\d+(?:\.\d+)?)\s*%', text, flags=re.I)
         return max((float(x) / 100 for x in matches), default=0.0)
 
@@ -114,7 +113,14 @@ class ResearchRuntime:
 
     def cycle(self,max_research_tasks=10):
         queued=self.queue_agent_requests(); drained=self.drain(max_research_tasks); state=self.civilization.step()
-        return {'civilization':state,'research_runtime':{'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'drained':len(drained),'queued_before_cycle':queued,'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'budget':self.budget.snapshot()}}
+        # Deployment happens only after the civilization has researched,
+        # validated, ranked and marked candidates as passed. The Bankr layer
+        # can only reach /token-launches/deploy; it has no wallet transfer,
+        # swap, sign or submit methods. Live mode is opt-in via host env vars.
+        launched=self.bankr.autonomous_deploy(self.civilization, cycle=state['tick'], max_deploys=4)
+        self.bankr_launches.extend({**p.__dict__,'bankr_slot':self.bankr.agent_slot(p.agent)} for p in launched)
+        self.stats.bankr_launches += len(launched)
+        return {'civilization':state,'research_runtime':{'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'drained':len(drained),'queued_before_cycle':queued,'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'budget':self.budget.snapshot(),'bankr':{**self.bankr.snapshot(),'launches':self.bankr_launches[-20:]}}}
 
     def snapshot(self):
-        return {'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'budget':self.budget.snapshot(),'civilization':self.civilization.snapshot()}
+        return {'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'budget':self.budget.snapshot(),'bankr':{**self.bankr.snapshot(),'launches':self.bankr_launches[-20:]},'civilization':self.civilization.snapshot()}
