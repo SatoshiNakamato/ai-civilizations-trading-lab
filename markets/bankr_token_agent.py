@@ -134,10 +134,12 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count counted launch attempts in the shared rolling 24h budget.
+        """Count one quota slot per live launch attempt in the shared rolling 24h budget.
 
         ``agent`` is retained only for API compatibility. It is intentionally
         ignored because the free-tier limit is shared by this application.
+        A successful attempt also produces a later ``deployed`` audit record;
+        that record is informational and must not consume a second quota slot.
         """
         now = time.time() if now is None else now
         cutoff = now - 86400
@@ -147,7 +149,7 @@ class BankrTokenAgent:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") not in {"deployed", "attempted"}:
+                    if item.get("status") != "attempted":
                         continue
                     if float(item.get("created_at", 0)) >= cutoff:
                         count += 1
@@ -162,7 +164,7 @@ class BankrTokenAgent:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") not in {"deployed", "attempted"}:
+                    if item.get("status") != "attempted":
                         continue
                     latest = max(latest, float(item.get("created_at", 0)))
         except OSError:
