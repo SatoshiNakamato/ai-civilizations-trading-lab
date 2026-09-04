@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 import os, time
 from markets.audit_log import AuditLog
 from markets.continuous_arbitrage import ContinuousArbitrage
@@ -36,6 +36,15 @@ class TradingCivilizationV1:
         self.risk=RiskGovernor(); self.alerts=AlertGate(); self.email=EmailAlertGateway(); self.research=AutonomousResearchEngine(); self.tickers=TickerBrain()
         self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl")); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
 
+    @staticmethod
+    def _as_payload(value):
+        """Serialize real dataclasses and lightweight test doubles alike."""
+        if is_dataclass(value):
+            return asdict(value)
+        if hasattr(value, "__dict__"):
+            return dict(vars(value))
+        return value
+
     def _send_alpha_alerts(self, opportunities):
         sent = 0
         for o in opportunities[:3]:
@@ -64,7 +73,7 @@ class TradingCivilizationV1:
         for o in top:
             h=o.hypothesis
             self._event("research",h.agent,"produced",{"ticker":h.ticker,"hypothesis_id":h.hypothesis_id,"score":h.score,"thesis":h.thesis})
-            self._event("debate",h.agent,"challenged",asdict(o.debate)); self._event("evidence",h.agent,"verified",{"score":o.evidence_score})
+            self._event("debate",h.agent,"challenged",self._as_payload(o.debate)); self._event("evidence",h.agent,"verified",{"score":o.evidence_score})
             self._event("ranking",h.agent,"ranked",{"risk_adjusted":o.risk_adjusted})
         telemetry.stage("research","ok",len(self.agents),"public-data-aware autonomous research executed")
         telemetry.stage("hypotheses","ok",len(opportunities),"independent hypotheses generated")
@@ -78,7 +87,7 @@ class TradingCivilizationV1:
         try:
             arb_result=self.arbitrage.cycle()
             if arb_result.opened or arb_result.closed:
-                self._event("arbitrage","SYSTEM","cycle",asdict(arb_result))
+                self._event("arbitrage","SYSTEM","cycle",self._as_payload(arb_result))
             telemetry.stage("arbitrage","ok",arb_result.opened,"live public quotes scanned; paper fills only")
         except Exception as exc:
             self._event("arbitrage","SYSTEM","error",{"error":f"{type(exc).__name__}: {exc}"})
@@ -106,7 +115,7 @@ class TradingCivilizationV1:
         telemetry.stage("on_chain_observation","pending" if deployments else "idle",len(deployments),"launches queued for observation")
         telemetry.stage("pnl","ok",0,"portfolio accounting available")
         telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
-        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot(),"alerts":{"email":self.email.snapshot(),"alpha_sent":alpha_alerts},"arbitrage":asdict(arb_result) if arb_result else None}
+        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot(),"alerts":{"email":self.email.snapshot(),"alpha_sent":alpha_alerts},"arbitrage":self._as_payload(arb_result) if arb_result else None}
         result["telemetry"]=telemetry.snapshot(); self._event("cycle","SYSTEM","completed",result); telemetry.log(); return result
 
     def _event(self,stage,agent,status,payload): self.audit.append("lifecycle",**asdict(LifecycleEvent(self.cycle_count,stage,agent,status,payload,time.time())))
