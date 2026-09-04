@@ -5,6 +5,8 @@ import threading
 import time
 from dataclasses import dataclass
 from .core import Civilization
+from .research_runtime import ResearchRuntime
+from .research_observability import ResearchObservability
 
 @dataclass
 class RuntimeStats:
@@ -14,9 +16,11 @@ class RuntimeStats:
     errors: int = 0
 
 class ContinuousCivilization:
-    """Long-running research simulation. No trading or financial execution is performed."""
+    """Long-running research simulation with governed external research."""
     def __init__(self, size: int = 100, interval_seconds: int = 60, seed: int = 42):
         self.civilization = Civilization(size=size, seed=seed)
+        self.research = ResearchRuntime(self.civilization)
+        self.observability = ResearchObservability()
         self.interval_seconds = max(5, int(interval_seconds))
         self.stats = RuntimeStats(started_at=time.time())
         self.stop_event = threading.Event()
@@ -24,12 +28,18 @@ class ContinuousCivilization:
 
     def cycle(self):
         try:
-            self.last_state = self.civilization.step()
+            result = self.research.cycle(max_research_tasks=10)
+            self.last_state = result["civilization"]
             self.stats.cycles += 1
             self.stats.last_cycle_at = time.time()
-            return self.last_state
+            result["observability"] = self.observability.cycle(
+                research=result["research_runtime"],
+                civilization=self.last_state,
+            )
+            return result
         except Exception:
             self.stats.errors += 1
+            self.observability.error()
             raise
 
     def run_forever(self):
@@ -40,9 +50,11 @@ class ContinuousCivilization:
         while not self.stop_event.is_set():
             started = time.time()
             try:
-                state = self.cycle()
+                result = self.cycle()
+                state = result["civilization"]
                 best = state.get('best_agents', [{}])[0]
-                print(f"cycle={self.stats.cycles} generation={state['generation']} ideas={state['ideas']} predictions={state['evolution']['predictions']} resolved={state['evolution']['resolved_predictions']} top={best.get('id','-')} capability={best.get('capability','-')}", flush=True)
+                rr = result["research_runtime"]
+                print(f"cycle={self.stats.cycles} generation={state['generation']} ideas={state['ideas']} predictions={state['evolution']['predictions']} research_completed={rr['stats']['completed']} cache_hits={rr['stats']['cache_hits']} top={best.get('id','-')} capability={best.get('capability','-')}", flush=True)
             except Exception as exc:
                 print(f'cycle error: {type(exc).__name__}: {exc}', flush=True)
             remaining = max(0.0, self.interval_seconds - (time.time() - started))
@@ -51,7 +63,6 @@ class ContinuousCivilization:
 
     def stop(self):
         self.stop_event.set()
-
 
 def main():
     runtime = ContinuousCivilization()
