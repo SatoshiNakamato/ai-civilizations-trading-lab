@@ -40,9 +40,8 @@ class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
     Keys stay in the host environment. The free-tier allowance is a single
-    shared budget: at most three counted launch attempts in any rolling 24h.
-    Bankr itself decides whether an attempt is countable; this local ledger
-    counts only responses that actually contain a transaction hash.
+    shared budget: at most three successful launches in any rolling 24h.
+    Failed attempts and simulation-only responses do not consume this budget.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -155,20 +154,19 @@ class BankrTokenAgent:
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError): return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        latest_timestamp = 0.0; records: list[dict] = []
+        records: list[dict] = []
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
                     if item.get("status") != "deployed": continue
-                    try: created = float(item.get("created_at", 0))
+                    try: float(item.get("created_at", 0))
                     except (TypeError, ValueError): continue
-                    records.append(item); latest_timestamp = max(latest_timestamp, created)
+                    records.append(item)
         except OSError: return 0
         if now is None:
             now = time.time()
-            if latest_timestamp and latest_timestamp < now - 86400: now = latest_timestamp
         cutoff = now - 86400
         return sum(1 for item in records if cutoff <= float(item.get("created_at", 0)) <= now)
 
@@ -213,11 +211,9 @@ class BankrTokenAgent:
         lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
             used = self.deployments_today()
-            if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY: raise RuntimeError(f"Bankr local success quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
-            # Do not send simulateOnly at all for a live deployment. Bankr's API
-            # defaults this field to false; omitting it avoids integrations or
-            # gateways that incorrectly coerce an explicit false into simulation.
-            payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True}
+            if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
+                raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+            payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
             headers = {"Content-Type": "application/json", "Accept": "application/json", **self._auth_headers(key)}
