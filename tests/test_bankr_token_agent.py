@@ -4,7 +4,7 @@ from civilizations.bankr_token_agent import BankrTokenAgent
 def test_plan_and_simulate(tmp_path):
     b = BankrTokenAgent(str(tmp_path / 'bankr.jsonl'), live=False)
     p = b.plan('A01', 'Alpha Civilization', 'alpha!', 'research-backed concept', .91, 'base')
-    assert p.symbol == 'ALPHA!'.replace('!', '')[:10]
+    assert p.symbol == 'ALPHA'[:10]
     x = b.deploy(p)
     assert x.status == 'simulated'
 
@@ -38,3 +38,9 @@ def test_unknown_agent_has_no_credential(tmp_path):
     except ValueError:
         return
     assert False
+
+
+def test_global_launch_cooldown_is_60_seconds(tmp_path):
+    b = BankrTokenAgent(str(tmp_path / 'bankr.jsonl'), live=True)
+    assert b.DEPLOY_COOLDOWN_SECONDS == 60
+    assert b.snapshot()['deploy_cooldown_seconds'] == 60
