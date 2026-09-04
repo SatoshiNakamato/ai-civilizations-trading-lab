@@ -54,53 +54,43 @@ class TradingCivilizationV1:
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]; bankr_plans=[]; intents=[]
-        # Keep this compatible with lightweight test doubles and alternate
-        # Bankr adapters that expose the quota through a configuration method.
         shared_quota=getattr(self.bankr,"MAX_LAUNCHES_PER_ROLLING_DAY",3)
         for o in execution[:1]:
             agent=o.hypothesis.agent
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
-
-            # The free-tier limit is shared by the whole Bankr account, not by
-            # individual agent keys. Defer automatically once the three-launch
-            # rolling-24h quota is exhausted; do not turn normal quota pressure
-            # into a deployment error and do not make another API request.
             quota_used=self.bankr.deployments_today()
             if self.bankr.live and quota_used >= shared_quota:
-                plan.status="deferred"
-                self.bankr._audit(plan)
+                plan.status="deferred"; self.bankr._audit(plan)
                 intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":False,"reason":f"shared Bankr free-account quota reached: {quota_used}/{shared_quota} in rolling 24h"}
-                intents.append(intent)
-                self._event("launch_intent",agent,"blocked",intent)
-                self._event("bankr",agent,"deferred",{"ticker":ticker.symbol,"reason":intent["reason"]})
-                bankr_plans.append(asdict(plan))
-                continue
-
+                intents.append(intent); self._event("launch_intent",agent,"blocked",intent); self._event("bankr",agent,"deferred",{"ticker":ticker.symbol,"reason":intent["reason"]}); bankr_plans.append(asdict(plan)); continue
             authenticated=(not self.bankr.live) or self.bankr.credential_configured(agent)
             decision=self.deployment_policy.evaluate(plan,deployments_today=quota_used,authenticated=authenticated)
             intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":decision.allowed,"reason":decision.reason}
-            intents.append(intent)
-            self._event("launch_intent",agent,"approved" if decision.allowed else "blocked",intent)
-            if not decision.allowed:
-                bankr_plans.append(asdict(plan))
-                continue
+            intents.append(intent); self._event("launch_intent",agent,"approved" if decision.allowed else "blocked",intent)
+            if not decision.allowed: bankr_plans.append(asdict(plan)); continue
             try:
                 result=self.bankr.deploy(plan) if self.bankr.live else self.bankr.simulate(plan)
             except Exception as exc:
-                self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":f"{type(exc).__name__}: {exc}"})
-                bankr_plans.append(asdict(plan))
-                continue
-            result_dict=asdict(result)
-            bankr_plans.append(result_dict)
-            deployments.append(result_dict); existing.add(ticker.symbol)
+                error=f"{type(exc).__name__}: {exc}"; self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":error}); bankr_plans.append(asdict(plan)); continue
+            result_dict=asdict(result); bankr_plans.append(result_dict); deployments.append(result_dict); existing.add(ticker.symbol)
             self._event("bankr",agent,result.status,{"ticker":ticker.symbol,"chain":chain,"token_address":result.token_address,"tx_hash":result.tx_hash})
         telemetry.stage("risk","ok",len(execution),"risk governor evaluated candidates")
         telemetry.stage("deployment_policy","ok",len(intents),"deployment policy evaluated survivors")
         telemetry.stage("launch_intent","ok",len([x for x in intents if x["allowed"]]),"launch intents produced after research and risk gates")
-        telemetry.stage("bankr","deployed" if any(x["status"]=="deployed" for x in deployments) else ("simulated" if deployments else "idle"),len(deployments),"autonomous Bankr token-launch execution")
-        telemetry.stage("on_chain_observation","pending" if deployments else "idle",len(deployments),"launches queued for observation")
+        if any(x.get("status")=="deployed" for x in deployments):
+            bankr_status="deployed"; bankr_detail="autonomous Bankr token-launch execution"
+        elif any(x.get("status")=="deferred" for x in bankr_plans):
+            bankr_status="deferred"; bankr_detail="Bankr launch deferred by automatic quota gate"
+        elif self.bankr.live and intents:
+            bankr_status="error"; bankr_detail="Bankr live launch attempted but no deployment succeeded; inspect lifecycle audit for the API error"
+        elif deployments:
+            bankr_status="simulated"; bankr_detail="autonomous Bankr token-launch simulation"
+        else:
+            bankr_status="idle"; bankr_detail="no Bankr deployment candidate reached execution"
+        telemetry.stage("bankr",bankr_status,len(deployments),bankr_detail)
+        telemetry.stage("on_chain_observation","pending" if any(x.get("status")=="deployed" for x in deployments) else "idle",len([x for x in deployments if x.get("status")=="deployed"]),"launches queued for observation")
         telemetry.stage("pnl","ok",0,"portfolio accounting available")
         telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
         result={"cycle":self.cycle_count,"signals":len(last_signals),"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"launch_intents":intents,"bankr_plans":bankr_plans,"execution_intents":deployments,"portfolio":self.portfolio.snapshot()}
