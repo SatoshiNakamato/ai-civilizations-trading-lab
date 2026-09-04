@@ -1,0 +1,14 @@
+# Local secrets
+.env
+*.env.local
+
+# Civilization credentials and state
+.config/ai-civilization/
+provider_usage.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local backups
+*.backup
