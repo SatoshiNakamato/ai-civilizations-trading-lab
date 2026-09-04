@@ -10,7 +10,7 @@ This project starts in simulation and paper trading. Live execution is deliberat
 
 ## Research budget
 
-The keyless You.com MCP free profile provides `you-search` with a 100-query daily limit. The runtime now enforces a persistent 50/50 allocation: up to 50 searches are reserved for the dedicated `arb` research lane and up to 50 for all other agents. Cache hits do not consume the provider budget, and retries reserve their own search slot. citeturn0search0
+The keyless You.com MCP free profile provides `you-search` with a 100-query daily limit. The runtime now enforces a persistent 50/50 allocation: up to 50 searches are reserved for the dedicated `arb` research lane and up to 50 for all other agents. Cache hits do not consume the provider budget, and retries reserve their own search slot.
 
 ## Financial results
 
