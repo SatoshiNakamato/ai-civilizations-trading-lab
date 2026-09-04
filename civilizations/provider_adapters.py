@@ -34,22 +34,23 @@ class YouResearchAdapter:
             output = data.get("output", {})
             sources = [{"title": str(s.get("title", "")), "url": str(s.get("url", ""))} for s in (output.get("sources", []) or []) if isinstance(s, dict)]
             return ProviderResponse("you", True, str(output.get("content", "")), sources)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc: return ProviderResponse("you", False, error=f"{type(exc).__name__}: {exc}")
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc: return ProviderResponse("you", False, error=f"{type(exc).__name__}: {exc}")
 
 class AgentRouterAdapter:
-    """OpenAI-compatible AgentRouter adapter; route/model are private configuration."""
+    """Anthropic-compatible AgentRouter adapter."""
     def __init__(self, manager: ProviderManager | None = None):
-        self.manager = manager or ProviderManager(); self.base_url = os.getenv("AGENTROUTER_BASE_URL", "").rstrip("/"); self.model = os.getenv("AGENTROUTER_MODEL", "")
+        self.manager = manager or ProviderManager()
+        self.base_url = (os.getenv("ANTHROPIC_BASE_URL") or "https://co.agentrouter.org").rstrip("/")
+        self.model = os.getenv("ANTHROPIC_MODEL") or "claude-opus-4-6"
     def reason(self, agent_id: str, prompt: str) -> ProviderResponse:
-        # Check configuration before reserving a billable call.
-        if not self.base_url or not self.model: return ProviderResponse("agentrouter", False, error="AGENTROUTER_BASE_URL or AGENTROUTER_MODEL not configured")
         auth = self.manager.authorize(agent_id, "deep_reasoning")
         if not auth.get("allowed"): return ProviderResponse("agentrouter", False, error=auth.get("reason", "not_authorized"))
         try:
-            data = _post_json(self.base_url + "/chat/completions", {"Authorization": f"Bearer {self.manager.credential_for('agentrouter') or ''}", "Content-Type": "application/json"}, {"model": self.model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2})
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return ProviderResponse("agentrouter", True, str(content))
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc: return ProviderResponse("agentrouter", False, error=f"{type(exc).__name__}: {exc}")
+            data = _post_json(self.base_url + "/v1/messages", {"Authorization": f"Bearer {self.manager.credential_for('agentrouter') or ''}", "anthropic-version": "2023-06-01", "Content-Type": "application/json"}, {"model": self.model, "max_tokens": 256, "messages": [{"role": "user", "content": prompt[:40000]}]})
+            blocks = data.get("content", []) or []
+            content = "\n".join(str(b.get("text", "")) for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+            return ProviderResponse("agentrouter", True, content)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc: return ProviderResponse("agentrouter", False, error=f"{type(exc).__name__}: {exc}")
 
 class CognitiveGateway:
     """Only assigned agents can request external cognition through the budget gate."""
