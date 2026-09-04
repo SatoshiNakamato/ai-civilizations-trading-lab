@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -145,35 +146,29 @@ class BankrTokenAgent:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     def recent_symbols(self, timeout: int = 10) -> set[str]:
-        if not self.live:
-            return set()
+        if not self.live: return set()
         req = urllib.request.Request(self.LAUNCHES_ENDPOINT, headers={"Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response: body = json.loads(response.read().decode())
             launches = body.get("launches", body if isinstance(body, list) else [])
             return {self.normalize_symbol(x.get("tokenSymbol", "")) for x in launches if isinstance(x, dict)}
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError):
-            return set()
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError): return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        latest_timestamp = 0.0
-        records: list[dict] = []
+        latest_timestamp = 0.0; records: list[dict] = []
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") != "deployed":
-                        continue
+                    if item.get("status") != "deployed": continue
                     try: created = float(item.get("created_at", 0))
                     except (TypeError, ValueError): continue
                     records.append(item); latest_timestamp = max(latest_timestamp, created)
-        except OSError:
-            return 0
+        except OSError: return 0
         if now is None:
             now = time.time()
-            if latest_timestamp and latest_timestamp < now - 86400:
-                now = latest_timestamp
+            if latest_timestamp and latest_timestamp < now - 86400: now = latest_timestamp
         cutoff = now - 86400
         return sum(1 for item in records if cutoff <= float(item.get("created_at", 0)) <= now)
 
@@ -194,8 +189,7 @@ class BankrTokenAgent:
         return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time(agent)))
 
     def _acquire_deploy_gate(self, agent: str):
-        lock_handle = open(self.lock_path, "a+", encoding="utf-8")
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        lock_handle = open(self.lock_path, "a+", encoding="utf-8"); fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         remaining = self.cooldown_remaining(agent)
         if remaining > 0: time.sleep(remaining)
         return lock_handle
@@ -219,8 +213,7 @@ class BankrTokenAgent:
         lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
             used = self.deployments_today()
-            if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-                raise RuntimeError(f"Bankr local success quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+            if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY: raise RuntimeError(f"Bankr local success quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
@@ -230,17 +223,11 @@ class BankrTokenAgent:
             try:
                 with urllib.request.urlopen(req, timeout=45) as response: body = json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
-                detail = self._error_detail(exc)
-                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
-                raise RuntimeError(f"Bankr deployment rejected: {detail}") from exc
+                detail = self._error_detail(exc); failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(f"Bankr deployment rejected: {detail}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-                detail = f"{type(exc).__name__}: {exc}"
-                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
-                raise RuntimeError(f"Bankr deployment transport/response error: {detail}") from exc
+                detail = f"{type(exc).__name__}: {exc}"; failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(f"Bankr deployment transport/response error: {detail}") from exc
             if body.get("simulated") is True or not body.get("txHash", body.get("tx_hash", "")):
-                detail = "Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast"
-                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
-                raise RuntimeError(detail)
+                detail = "Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast"; failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(detail)
             result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time(); result.token_address = str(body.get("tokenAddress", body.get("token_address", ""))); result.tx_hash = str(body.get("txHash", body.get("tx_hash", ""))); self._audit(result); return result
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN); lock_handle.close()
