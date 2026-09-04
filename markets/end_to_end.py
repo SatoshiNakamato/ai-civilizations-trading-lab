@@ -31,8 +31,6 @@ class TradingCivilizationV1:
         self.arbitrage=ContinuousArbitrage(runtime=runtime, agents=self.agents) if runtime else None
         self.audit=AuditLog(os.path.join(data_dir,"lifecycle.jsonl")); self.portfolio=Portfolio(); self.metrics=StrategyMetrics()
         self.risk=RiskGovernor(); self.alerts=AlertGate(); self.research=AutonomousResearchEngine(); self.tickers=TickerBrain()
-        # Library/test callers are deterministic simulations by default. The hosted worker
-        # passes bankr_live explicitly from BANKR_LIVE_DEPLOY when live execution is desired.
         self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl"), live=False if bankr_live is None else bankr_live); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
 
     def cycle(self):
@@ -56,13 +54,29 @@ class TradingCivilizationV1:
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]; bankr_plans=[]; intents=[]
+        shared_quota=self.bankr.MAX_LAUNCHES_PER_ROLLING_DAY
         for o in execution[:1]:
             agent=o.hypothesis.agent
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
+
+            # The free-tier limit is shared by the whole Bankr account, not by
+            # individual agent keys. Defer automatically once the three-launch
+            # rolling-24h quota is exhausted; do not turn normal quota pressure
+            # into a deployment error and do not make another API request.
+            quota_used=self.bankr.deployments_today()
+            if self.bankr.live and quota_used >= shared_quota:
+                plan.status="deferred"
+                self.bankr._audit(plan)
+                intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":False,"reason":f"shared Bankr free-account quota reached: {quota_used}/{shared_quota} in rolling 24h"}
+                intents.append(intent)
+                self._event("launch_intent",agent,"blocked",intent)
+                self._event("bankr",agent,"deferred",{"ticker":ticker.symbol,"reason":intent["reason"]})
+                continue
+
             authenticated=(not self.bankr.live) or self.bankr.credential_configured(agent)
-            decision=self.deployment_policy.evaluate(plan,deployments_today=self.bankr.deployments_today(agent),authenticated=authenticated)
+            decision=self.deployment_policy.evaluate(plan,deployments_today=quota_used,authenticated=authenticated)
             intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":decision.allowed,"reason":decision.reason}
             intents.append(intent)
             self._event("launch_intent",agent,"approved" if decision.allowed else "blocked",intent)
