@@ -38,9 +38,11 @@ class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
     Keys stay in the host environment. Execution identities may research and
-    author launches independently, but the free-tier allowance is a single
-    shared budget: at most three counted launch attempts in any rolling 24-hour
-    window. The quota gate is automatic and serialized across workers.
+    author launches independently, while the free-tier allowance is a single
+    shared budget: at most three *successful* deployments in any rolling
+    24-hour window. Failed API calls, rejected launches, and simulation/no-tx
+    responses do not consume the deployment allowance. The quota gate is
+    automatic and serialized across workers.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -134,12 +136,13 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count shared launch attempts in the rolling 24-hour budget.
+        """Count successful deployments in the shared rolling 24-hour budget.
 
         ``agent`` is retained for compatibility and intentionally ignored.
-        Older audit records may use ``deployed`` without a preceding
-        ``attempted`` record, so those count too. A normal live launch writes
-        both records; the matching deployed record is not double-counted.
+        ``attempted`` audit records are lifecycle telemetry only and do not
+        consume the quota. A deployment is counted only when its audit record
+        has status ``deployed``. This lets a failed/rejected launch be retried
+        without incorrectly exhausting the free-account allowance.
         """
         latest_timestamp = 0.0
         records: list[dict] = []
@@ -150,13 +153,14 @@ class BankrTokenAgent:
                         item = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if item.get("status") in {"attempted", "deployed"}:
-                        try:
-                            created = float(item.get("created_at", 0))
-                        except (TypeError, ValueError):
-                            continue
-                        records.append(item)
-                        latest_timestamp = max(latest_timestamp, created)
+                    if item.get("status") != "deployed":
+                        continue
+                    try:
+                        created = float(item.get("created_at", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    records.append(item)
+                    latest_timestamp = max(latest_timestamp, created)
         except OSError:
             return 0
 
@@ -168,23 +172,11 @@ class BankrTokenAgent:
             if latest_timestamp and latest_timestamp < now - 86400:
                 now = latest_timestamp
         cutoff = now - 86400
-
-        attempted_keys: set[tuple] = set()
-        count = 0
-        for item in records:
-            try:
-                created = float(item.get("created_at", 0))
-            except (TypeError, ValueError):
-                continue
-            if created < cutoff or created > now:
-                continue
-            key = (item.get("agent", ""), item.get("symbol", ""), item.get("name", ""))
-            if item.get("status") == "attempted":
-                attempted_keys.add(key)
-                count += 1
-            elif key not in attempted_keys:
-                count += 1
-        return count
+        return sum(
+            1
+            for item in records
+            if cutoff <= float(item.get("created_at", 0)) <= now
+        )
 
     def _last_deployment_time(self, agent: str | None = None) -> float:
         latest = 0.0
