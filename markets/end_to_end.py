@@ -54,7 +54,9 @@ class TradingCivilizationV1:
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]; bankr_plans=[]; intents=[]
-        shared_quota=self.bankr.MAX_LAUNCHES_PER_ROLLING_DAY
+        # Keep this compatible with lightweight test doubles and alternate
+        # Bankr adapters that expose the quota through a configuration method.
+        shared_quota=getattr(self.bankr,"MAX_LAUNCHES_PER_ROLLING_DAY",3)
         for o in execution[:1]:
             agent=o.hypothesis.agent
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
@@ -73,6 +75,7 @@ class TradingCivilizationV1:
                 intents.append(intent)
                 self._event("launch_intent",agent,"blocked",intent)
                 self._event("bankr",agent,"deferred",{"ticker":ticker.symbol,"reason":intent["reason"]})
+                bankr_plans.append(asdict(plan))
                 continue
 
             authenticated=(not self.bankr.live) or self.bankr.credential_configured(agent)
