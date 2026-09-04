@@ -11,6 +11,9 @@ class FakeAdapter:
     def __init__(self):
         self.orders = []
 
+    def ticker(self, symbol):
+        return {"ask": 10.0, "bid": 10.0, "last": 10.0}
+
     def create_market_order(self, symbol, side, amount):
         result = OrderResult(f"order-{len(self.orders)+1}", symbol, side, amount, 10.0, "closed", {})
         self.orders.append(result)
@@ -49,6 +52,22 @@ def test_live_engine_enforces_order_and_daily_limits(monkeypatch, tmp_path):
     e.market_order("BTC/USDC", "buy", 1, 10, "one")
     with pytest.raises(RuntimeError, match="daily live notional"):
         e.market_order("BTC/USDC", "buy", 1, 10, "two")
+
+
+def test_live_engine_enforces_position_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVE_TRADING_CONFIRMATION", "I_UNDERSTAND_LIVE_RISK")
+    e = engine(tmp_path, max_position_quote=10)
+    e.market_order("BTC/USDC", "buy", 1, 10, "one")
+    with pytest.raises(RuntimeError, match="position quote limit"):
+        e.market_order("BTC/USDC", "buy", 1, 10, "two")
+
+
+def test_live_engine_enforces_slippage(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVE_TRADING_CONFIRMATION", "I_UNDERSTAND_LIVE_RISK")
+    e = engine(tmp_path, slippage_bps=10)
+    e.adapter.ticker = lambda symbol: {"ask": 10.1, "bid": 10.1, "last": 10.1}
+    with pytest.raises(RuntimeError, match="slippage guard"):
+        e.market_order("BTC/USDC", "buy", 1, 10, "slippage")
 
 
 def test_kill_switch_blocks_live_orders(monkeypatch, tmp_path):
