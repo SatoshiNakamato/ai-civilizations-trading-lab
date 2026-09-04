@@ -5,6 +5,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .financial_results import FinancialResults
+
 
 @dataclass(frozen=True)
 class PaperTrade:
@@ -24,10 +26,11 @@ class PaperTrade:
 class PaperLedger:
     """Audit-only ledger for hypothetical opportunities; never submits orders."""
 
-    def __init__(self, path: str = "data/paper_trades.jsonl"):
+    def __init__(self, path: str = "data/paper_trades.jsonl", results_path: str = "data/financial_results.jsonl"):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.trades: list[PaperTrade] = []
+        self.performance = FinancialResults(results_path)
 
     def record(self, opportunity, quantity: float = 0.01) -> PaperTrade:
         if quantity <= 0:
@@ -52,6 +55,9 @@ class PaperLedger:
         self.trades.append(trade)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(trade), separators=(",", ":")) + "\n")
+        agents = getattr(opportunity, "agents", []) or []
+        agent = str(agents[0]) if agents else "unknown"
+        self.performance.record(trade, agent=agent, category=str(getattr(opportunity, "category", "unknown")))
         return trade
 
     def snapshot(self) -> dict:
@@ -61,4 +67,5 @@ class PaperLedger:
             "notional": round(sum(t.quantity * t.buy_price for t in self.trades), 8),
             "path": str(self.path),
             "mode": "paper-only",
+            "financial_results": self.performance.snapshot(),
         }
