@@ -1,41 +1,43 @@
 # Architecture
 
-The system is organized as a continuous decision loop:
+The system is organized as a continuous autonomous decision loop:
 
 ```text
-Research
+100-agent research mesh
   -> independent hypotheses
-  -> cross-agent challenge
-  -> evidence verification
-  -> opportunity ranking
+  -> cross-agent challenge / evidence exchange
+  -> opportunity attribution
+  -> ranking
   -> risk governor
-  -> deployment policy
-  -> Bankr execution
-  -> on-chain observation
-  -> P&L measurement
-  -> strategy evolution
-  -> next research cycle
+  -> execution policy
+  -> TradeIntent
+  -> LIVE exchange adapter
+  -> order reconciliation
+  -> position / P&L observation
+  -> strategy learning
+  -> next cycle
 ```
+
+## Execution modes
+
+- **Paper** remains available for research validation.
+- **Live** uses `execution.LiveExecutionEngine` and a CCXT exchange adapter. Live orders require `LIVE_TRADING=1` and explicit `LIVE_TRADING_CONFIRMATION=I_UNDERSTAND_LIVE_RISK`.
+- Bankr token launching is a separate capability and is not required for spot trading.
+
+## Live execution controls
+
+The execution boundary enforces per-order notional limits, daily notional limits, a realized-loss kill switch, deterministic idempotency, append-only audit records, and exchange reconciliation. API credentials are read only from environment variables and are never persisted.
 
 ## Separation of responsibilities
 
-- **Civilizations** coordinate agents, research, debate, evidence, and strategy evolution.
-- **Markets** provide opportunity, execution, portfolio, deployment, observation, audit, and replay primitives.
+- **Civilizations** coordinate research, debate, evidence, and strategy evolution.
+- **Markets** provide opportunity, portfolio, observation, audit, and replay primitives.
 - **Risk** decides whether a candidate is eligible for execution.
-- **Simulation** owns continuous runtime, persistence, and operational visibility.
+- **Execution** is the only component allowed to submit real orders.
+- **Monitoring** reports health, exposure, order state, and lifecycle events.
 
-## Agent model
+Research never directly submits an order. It produces a `TradeIntent`; the live runtime validates the intent and passes it to the guarded execution engine.
 
-Each agent should maintain independent hypotheses and strategy state. Shared evidence can be verified independently so that consensus is earned rather than assumed.
+## Persistence and recovery
 
-## Execution boundary
-
-Research must not directly trigger execution. Candidates pass ranking, risk, and deployment-policy gates before an execution adapter is called. This keeps live execution replaceable and auditable.
-
-## Feedback loop
-
-Every completed opportunity should produce an observation and measurable outcome. Strategy metrics aggregate those outcomes; strategy evolution uses the measurements to influence future research and selection.
-
-## Persistence
-
-Runtime state, observations, and audit information should be persisted so a hosted worker restart does not erase the civilization's operating history.
+Execution intents, submitted orders, and lifecycle events are persisted so a worker restart can reconcile exchange state instead of blindly submitting duplicates.
