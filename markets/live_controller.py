@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 import os
-import time
 
 from civilizations.autonomous_research import Opportunity
 from markets.live_execution import LiveExecutionEngine
 
 
 class LiveTradingController:
-    """Connect ranked research opportunities to real, unlevered spot orders.
-
-    The controller deliberately uses a small, explicit strategy: only the top
-    ranked opportunity is eligible; positive 24h momentum produces a buy and
-    negative momentum produces a sell only when the venue already reports a
-    sufficient base-asset balance. No leverage or borrowing is used.
-    """
+    """Connect ranked research opportunities to real, unlevered spot orders."""
 
     def __init__(self, executor: LiveExecutionEngine, quote_currency=None):
         self.executor = executor
@@ -32,8 +25,10 @@ class LiveTradingController:
             return None
         h = opportunity.hypothesis
         symbol = self._symbol(h.ticker)
-        observation = next((x for x in getattr(self.executor, "_market", []) if x.get("asset") == h.ticker), None)
-        move = float(observation.get("change_24h", 0.0)) if observation else 0.0
+        candles = self.executor.exchange.fetch_ohlcv(symbol, timeframe="1h", limit=25)
+        if len(candles) < 25:
+            raise RuntimeError(f"insufficient candle history for {symbol}")
+        move = (float(candles[-1][4]) / float(candles[0][4]) - 1.0) * 100.0
         side = "buy" if move >= 0 else "sell"
         ticker = self.executor.exchange.fetch_ticker(symbol)
         mark = float(ticker.get("ask") or ticker.get("last") or ticker.get("bid") or 0.0)
@@ -45,8 +40,5 @@ class LiveTradingController:
 
     def _symbol(self, ticker: str) -> str:
         raw = ticker.upper().replace("/", "")
-        if raw.endswith(self.quote_currency):
-            base = raw[: -len(self.quote_currency)]
-        else:
-            base = raw
+        base = raw[:-len(self.quote_currency)] if raw.endswith(self.quote_currency) else raw
         return f"{base}/{self.quote_currency}"
