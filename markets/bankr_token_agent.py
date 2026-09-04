@@ -144,18 +144,16 @@ class BankrTokenAgent:
         return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time()))
 
     def _acquire_deploy_gate(self):
-        """Acquire the global lock without blocking the worker for 60 seconds.
+        """Acquire the global lock and wait for any active cooldown.
 
-        A second launch is deferred by the caller when the cooldown is active;
-        the worker remains responsive to SIGTERM and can continue research.
+        The wait is deliberately inside the inter-process lock so two agents
+        cannot both observe the same expired cooldown and launch together.
         """
         lock_handle = open(self.lock_path, "a+", encoding="utf-8")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         remaining = self.cooldown_remaining()
         if remaining > 0:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            lock_handle.close()
-            raise RuntimeError(f"global Bankr launch cooldown active: {remaining:.1f}s remaining")
+            time.sleep(remaining)
         return lock_handle
 
     def plan(self, agent, name, symbol, thesis, score, chain="robinhood"):
