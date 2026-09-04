@@ -36,11 +36,10 @@ class BankrAuthResult:
 class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
-    Keys stay in the host environment. Each execution identity uses its own
-    Bankr account/key. Live launches are serialized per audit ledger and each
-    Bankr account is limited to three successful launches in a rolling 24h.
-    The agents may research independently and submit their own launch payloads;
-    the quota gate is automatic and prevents a fourth launch for that account.
+    Keys stay in the host environment. Execution identities may research and
+    author launches independently, but the free-tier allowance is a single
+    shared budget: at most three successful launches in any rolling 24-hour
+    window. The quota gate is automatic and serialized across workers.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -134,15 +133,13 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count successful launches for one Bankr account in rolling 24h.
+        """Count all successful launches in the shared rolling 24h budget.
 
-        The agent is the quota identity because each execution identity has its
-        own Bankr API key/account. Passing ``None`` returns the aggregate count
-        for compatibility with older callers and diagnostics.
+        ``agent`` is retained only for API compatibility. It is intentionally
+        ignored because the free-tier limit is shared, not per agent/key.
         """
         now = time.time() if now is None else now
         cutoff = now - 86400
-        wanted = agent.upper() if agent else None
         count = 0
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
@@ -150,8 +147,6 @@ class BankrTokenAgent:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
                     if item.get("status") != "deployed":
-                        continue
-                    if wanted and str(item.get("agent", "")).upper() != wanted:
                         continue
                     if float(item.get("created_at", 0)) >= cutoff:
                         count += 1
@@ -161,15 +156,12 @@ class BankrTokenAgent:
 
     def _last_deployment_time(self, agent: str | None = None) -> float:
         latest = 0.0
-        wanted = agent.upper() if agent else None
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
                     if item.get("status") != "deployed":
-                        continue
-                    if wanted and str(item.get("agent", "")).upper() != wanted:
                         continue
                     latest = max(latest, float(item.get("created_at", 0)))
         except OSError:
@@ -199,9 +191,6 @@ class BankrTokenAgent:
 
     def deploy(self, plan: TokenPlan):
         if not self.live: return self.simulate(plan)
-        used = self.deployments_today(plan.agent)
-        if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-            raise RuntimeError(f"Bankr free-account launch quota reached for {plan.agent}: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
         key = os.getenv(self.credential_env(plan.agent))
         if not key: raise RuntimeError(f"{self.credential_env(plan.agent)} is required for live deployment")
 
@@ -211,11 +200,12 @@ class BankrTokenAgent:
         if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip():
             raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
 
+        # Serialize quota check + deployment. This is a GLOBAL free-tier gate.
         lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
-            used = self.deployments_today(plan.agent)
+            used = self.deployments_today()
             if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-                raise RuntimeError(f"Bankr free-account launch quota reached for {plan.agent}: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+                raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
