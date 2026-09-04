@@ -52,7 +52,9 @@ class ContinuousArbitrage:
                         fill_ids.remove(fill_id)
                         closed += 1
         snap = self.runtime.snapshot()
-        return CycleResult(self.cycle_count, opened, closed, snap["paper"]["realized_pnl"], self.runtime.leaderboard.profitable(3))
+        leaderboard = getattr(self.runtime, "leaderboard", None)
+        profitable = leaderboard.profitable(3) if leaderboard is not None else []
+        return CycleResult(self.cycle_count, opened, closed, snap["paper"]["realized_pnl"], profitable)
 
     def run(self, cycles=1, interval_seconds=5):
         results=[]
