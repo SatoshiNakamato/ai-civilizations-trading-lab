@@ -22,7 +22,7 @@ Four Bankr user API keys can service the 100-agent population round-robin. Keys 
 
 The launcher sends only `POST /token-launches/deploy` requests. It does not call Bankr wallet transfer, swap, sign, or submit endpoints. Launches are capped locally at one attempt per wallet per cycle and the Bankr service's wallet launch quota remains authoritative. The agent chooses a deterministic creative name/ticker and launches only after the research/validation pipeline marks the candidate as passed.
 
-Bankr user-key token launches support Robinhood Chain by default and Base when `BANKR_DEFAULT_CHAIN=base`. Bankr's current API documentation states that the token-launch endpoint is separately permissioned from Wallet API writes. citeturn0search2turn0search5
+Bankr user-key token launches support Robinhood Chain by default and Base when `BANKR_DEFAULT_CHAIN=base`. Check Bankr's current API-key permissions and token-launch documentation before enabling live mode.
 
 ## Termux / Web
 
