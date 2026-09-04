@@ -36,14 +36,11 @@ class BankrAuthResult:
 class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
-    Keys stay in the host environment. User keys use X-API-Key; partner keys
-    use X-Partner-Key as required by Bankr. Wallet-transfer/sign/submit
-    capabilities are not used here.
-
-    Live launches are globally serialized and limited to three counted launch
-    attempts per rolling 24 hours for the whole free account, not three per
-    agent/key. The agents may still research independently; this gate protects
-    the shared Bankr account quota.
+    Keys stay in the host environment. Each execution identity uses its own
+    Bankr account/key. Live launches are serialized per audit ledger and each
+    Bankr account is limited to three successful launches in a rolling 24h.
+    The agents may research independently and submit their own launch payloads;
+    the quota gate is automatic and prevents a fourth launch for that account.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -137,46 +134,56 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count successful deployments for the shared account in rolling 24h.
+        """Count successful launches for one Bankr account in rolling 24h.
 
-        ``agent`` is retained for API compatibility, but the free-tier quota is
-        account-wide because multiple agent keys can share the same Bankr user.
+        The agent is the quota identity because each execution identity has its
+        own Bankr API key/account. Passing ``None`` returns the aggregate count
+        for compatibility with older callers and diagnostics.
         """
         now = time.time() if now is None else now
         cutoff = now - 86400
+        wanted = agent.upper() if agent else None
         count = 0
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") == "deployed" and float(item.get("created_at", 0)) >= cutoff:
+                    if item.get("status") != "deployed":
+                        continue
+                    if wanted and str(item.get("agent", "")).upper() != wanted:
+                        continue
+                    if float(item.get("created_at", 0)) >= cutoff:
                         count += 1
         except OSError:
             pass
         return count
 
-    def _last_deployment_time(self) -> float:
+    def _last_deployment_time(self, agent: str | None = None) -> float:
         latest = 0.0
+        wanted = agent.upper() if agent else None
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") == "deployed":
-                        latest = max(latest, float(item.get("created_at", 0)))
+                    if item.get("status") != "deployed":
+                        continue
+                    if wanted and str(item.get("agent", "")).upper() != wanted:
+                        continue
+                    latest = max(latest, float(item.get("created_at", 0)))
         except OSError:
             pass
         return latest
 
-    def cooldown_remaining(self, now: float | None = None) -> float:
+    def cooldown_remaining(self, agent: str | None = None, now: float | None = None) -> float:
         now = time.time() if now is None else now
-        return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time()))
+        return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time(agent)))
 
-    def _acquire_deploy_gate(self):
+    def _acquire_deploy_gate(self, agent: str):
         lock_handle = open(self.lock_path, "a+", encoding="utf-8")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        remaining = self.cooldown_remaining()
+        remaining = self.cooldown_remaining(agent)
         if remaining > 0:
             time.sleep(remaining)
         return lock_handle
@@ -192,9 +199,9 @@ class BankrTokenAgent:
 
     def deploy(self, plan: TokenPlan):
         if not self.live: return self.simulate(plan)
-        used = self.deployments_today()
+        used = self.deployments_today(plan.agent)
         if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-            raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+            raise RuntimeError(f"Bankr free-account launch quota reached for {plan.agent}: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
         key = os.getenv(self.credential_env(plan.agent))
         if not key: raise RuntimeError(f"{self.credential_env(plan.agent)} is required for live deployment")
 
@@ -204,11 +211,11 @@ class BankrTokenAgent:
         if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip():
             raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
 
-        lock_handle = self._acquire_deploy_gate()
+        lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
-            used = self.deployments_today()
+            used = self.deployments_today(plan.agent)
             if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-                raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
+                raise RuntimeError(f"Bankr free-account launch quota reached for {plan.agent}: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
@@ -232,4 +239,4 @@ class BankrTokenAgent:
         with open(self.audit_path, "a", encoding="utf-8") as handle: handle.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
 
     def snapshot(self):
-        return {"live": self.live, "audit_path": self.audit_path, "configured_agents": self.configured_agents(), "deploy_cooldown_seconds": self.DEPLOY_COOLDOWN_SECONDS, "daily_launch_quota": self.MAX_LAUNCHES_PER_ROLLING_DAY, "deployments_last_24h": self.deployments_today(), "cooldown_remaining": self.cooldown_remaining()}
+        return {"live": self.live, "audit_path": self.audit_path, "configured_agents": self.configured_agents(), "deploy_cooldown_seconds": self.DEPLOY_COOLDOWN_SECONDS, "daily_launch_quota": self.MAX_LAUNCHES_PER_ROLLING_DAY, "deployments_last_24h": self.deployments_today(), "deployments_last_24h_by_agent": {a: self.deployments_today(a) for a in AGENT_BANKR_KEYS}, "cooldown_remaining": self.cooldown_remaining()}
