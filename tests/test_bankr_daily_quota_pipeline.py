@@ -77,15 +77,18 @@ def test_live_pipeline_uses_agent_research_for_deployment(monkeypatch, tmp_path)
 
     class Response:
         status = 200
+        def __init__(self, body): self.body = body
         def __enter__(self): return self
         def __exit__(self, *args): return False
-        def read(self): return b'{"tokenAddress":"0xTOKEN","txHash":"0xTX"}'
+        def read(self): return self.body
 
     def fake_urlopen(request, timeout=0):
-        # Only the deployment request is expected in this isolated pipeline test.
-        assert request.data is not None
+        # The pipeline first performs a GET to discover existing launches, then
+        # POSTs the agent-authored launch payload. Keep both operations isolated.
+        if request.data is None:
+            return Response(b'{"launches":[]}')
         captured.append(json.loads(request.data.decode()))
-        return Response()
+        return Response(b'{"tokenAddress":"0xTOKEN","txHash":"0xTX"}')
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("time.time", lambda: 1000.0)
