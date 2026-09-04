@@ -8,6 +8,14 @@ The civilization behaves like a society of specialized researchers. Agents obser
 
 This project starts in simulation and paper trading. Live execution is deliberately separated behind risk controls and explicit configuration.
 
+## Research budget
+
+The keyless You.com MCP free profile provides `you-search` with a 100-query daily limit. The runtime now enforces a persistent 50/50 allocation: up to 50 searches are reserved for the dedicated `arb` research lane and up to 50 for all other agents. Cache hits do not consume the provider budget, and retries reserve their own search slot. citeturn0search0
+
+## Financial results
+
+Paper opportunities are now connected to a financial-results layer that reports net P&L, return on notional, win rate, drawdown, Sharpe-like statistics, and attribution by agent and opportunity category. These are measured paper results from modeled fills, not guaranteed live returns.
+
 ## Termux / Web
 
 Designed to run on ordinary Python in Termux. A lightweight local web dashboard will expose the civilization state, agent activity, discovered opportunities, strategy leaderboard, and simulation controls.
