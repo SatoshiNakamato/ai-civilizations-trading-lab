@@ -50,9 +50,8 @@ class BankrTokenAgent:
     """
 
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
-    # Authentication/account endpoint used only for credential verification.
-    # It never submits a token deployment.
-    AUTH_ENDPOINT = "https://api.bankr.bot/user"
+    # Documented read-only wallet identity endpoint. It never creates or deploys.
+    AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
 
     def __init__(self, audit_path="data/bankr_token_plans.jsonl", live=None):
         self.audit_path = audit_path
@@ -80,7 +79,7 @@ class BankrTokenAgent:
         return {agent: bool(os.getenv(env_name)) for agent, env_name in AGENT_BANKR_KEYS.items()}
 
     def verify_agent(self, agent: str, timeout: int = 20) -> BankrAuthResult:
-        """Verify one Bankr key without creating or deploying anything."""
+        """Verify one Bankr user API key without creating or deploying anything."""
         agent = agent.upper()
         env_name = self.credential_env(agent)
         key = os.getenv(env_name)
@@ -99,17 +98,32 @@ class BankrTokenAgent:
                     body = json.loads(raw)
                 except json.JSONDecodeError:
                     body = {}
-                address = str(
-                    body.get("address", body.get("walletAddress", body.get("wallet_address", "")))
+
+                # /wallet/me documents the EVM address as either evmAddress or
+                # in wallets[].address. Keep parsing tolerant of both shapes.
+                address = str(body.get("evmAddress", ""))
+                if not address:
+                    for wallet in body.get("wallets", []) or []:
+                        if str(wallet.get("chain", "")).lower() == "evm":
+                            address = str(wallet.get("address", ""))
+                            break
+
+                return BankrAuthResult(
+                    agent,
+                    True,
+                    200 <= response.status < 300,
+                    status_code=response.status,
+                    account_address=address,
                 )
-                return BankrAuthResult(agent, True, 200 <= response.status < 300,
-                                       status_code=response.status, account_address=address)
         except urllib.error.HTTPError as exc:
             # Do not include response body: it can contain account/security details.
-            return BankrAuthResult(agent, True, False, status_code=exc.code,
-                                   error=f"HTTP {exc.code}")
+            return BankrAuthResult(
+                agent, True, False, status_code=exc.code, error=f"HTTP {exc.code}"
+            )
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return BankrAuthResult(agent, True, False, error=f"{type(exc).__name__}: {exc}")
+            return BankrAuthResult(
+                agent, True, False, error=f"{type(exc).__name__}: {exc}"
+            )
 
     def verify_all_agents(self, timeout: int = 20) -> list[BankrAuthResult]:
         return [self.verify_agent(agent, timeout=timeout) for agent in AGENT_BANKR_KEYS]
@@ -118,8 +132,10 @@ class BankrTokenAgent:
         chain = chain.lower()
         if chain not in {"base", "robinhood"}:
             raise ValueError("Bankr token launch chain must be base or robinhood")
-        plan = TokenPlan(agent.upper(), name[:100], self.normalize_symbol(symbol), chain,
-                         thesis[:500], float(score), created_at=time.time())
+        plan = TokenPlan(
+            agent.upper(), name[:100], self.normalize_symbol(symbol), chain,
+            thesis[:500], float(score), created_at=time.time()
+        )
         self._audit(plan)
         return plan
 
@@ -145,7 +161,8 @@ class BankrTokenAgent:
             "simulateOnly": False,
         }).encode()
         request = urllib.request.Request(
-            self.ENDPOINT, data=payload,
+            self.ENDPOINT,
+            data=payload,
             headers={"Content-Type": "application/json", "X-API-Key": key},
             method="POST",
         )
@@ -166,5 +183,8 @@ class BankrTokenAgent:
             handle.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
 
     def snapshot(self):
-        return {"live": self.live, "audit_path": self.audit_path,
-                "configured_agents": self.configured_agents()}
+        return {
+            "live": self.live,
+            "audit_path": self.audit_path,
+            "configured_agents": self.configured_agents(),
+        }
