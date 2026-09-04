@@ -6,26 +6,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from civilizations.email_alerts import AlertCandidate, EmailAlertGateway
 
-candidate = AlertCandidate(
-    title="TEST — Civilization email gateway",
-    category="breakthrough",
-    summary="Controlled connectivity test. No trading action is requested.",
-    confidence=0.95,
-    risk=0.10,
-    agent="SYSTEM-TEST",
-)
 
-gateway = EmailAlertGateway()
-print("Gateway enabled:", gateway.enabled())
-print("Recipient:", gateway.recipient)
-print("Severity:", candidate.severity)
+def main() -> int:
+    candidate = AlertCandidate(
+        title="TEST — Civilization email gateway",
+        category="breakthrough",
+        summary="Controlled connectivity test. No trading action is requested.",
+        confidence=0.95,
+        risk=0.10,
+        agent="SYSTEM-TEST",
+    )
 
-if not gateway.enabled():
-    raise SystemExit("SMTP configuration is not loaded")
+    gateway = EmailAlertGateway()
+    print("Gateway enabled:", gateway.enabled())
+    print("Recipient:", gateway.recipient)
+    print("Severity:", candidate.severity)
 
-try:
-    ok = gateway.send(candidate)
-    print("EMAIL SENT:", ok)
-except Exception as exc:
-    print("EMAIL FAILED:", type(exc).__name__, str(exc))
-    raise SystemExit(1)
+    if not gateway.enabled():
+        print("SMTP configuration is not loaded")
+        return 2
+
+    try:
+        ok = gateway.send(candidate)
+        print("EMAIL SENT:", ok)
+        return 0 if ok else 1
+    except Exception as exc:
+        print("EMAIL FAILED:", type(exc).__name__, str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
