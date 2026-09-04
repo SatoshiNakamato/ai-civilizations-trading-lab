@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import math
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -38,7 +38,7 @@ class Opportunity:
 
 
 class OpportunityEngine:
-    """Discover, validate, score, deduplicate and audit trading research opportunities.
+    """Discover, validate, score, deduplicate and audit research opportunities.
 
     This engine produces research candidates only. It never executes trades.
     """
@@ -53,13 +53,15 @@ class OpportunityEngine:
 
     @staticmethod
     def _key(category: str, asset: str, summary: str, buy: str = "", sell: str = "") -> str:
-        import hashlib
         text = "|".join(" ".join(x.lower().split()) for x in (category, asset, summary, buy, sell))
         return hashlib.sha256(text.encode()).hexdigest()[:20]
 
     def discover(self, opportunity: Opportunity) -> Opportunity | None:
         self.stats["discovered"] += 1
-        key = opportunity.opportunity_id or self._key(opportunity.category, opportunity.asset, opportunity.summary, opportunity.buy_venue, opportunity.sell_venue)
+        key = opportunity.opportunity_id or self._key(
+            opportunity.category, opportunity.asset, opportunity.summary,
+            opportunity.buy_venue, opportunity.sell_venue,
+        )
         opportunity.opportunity_id = key
         now = time.time()
         previous = self.seen.get(key, 0)
@@ -72,10 +74,19 @@ class OpportunityEngine:
         self._audit("discovered", opportunity)
         return opportunity
 
-    def validate(self, opportunity: Opportunity, *, min_confidence: float = 0.70, min_liquidity: float = 0.20, min_net_edge: float = 0.005) -> Opportunity:
+    def validate(
+        self,
+        opportunity: Opportunity,
+        *,
+        min_confidence: float = 0.70,
+        min_liquidity: float = 0.20,
+        min_net_edge: float = 0.005,
+    ) -> Opportunity:
         reasons = []
-        if not 0 <= opportunity.confidence <= 1: reasons.append("invalid confidence")
-        if not 0 <= opportunity.risk <= 1: reasons.append("invalid risk")
+        if not 0 <= opportunity.confidence <= 1:
+            reasons.append("invalid confidence")
+        if not 0 <= opportunity.risk <= 1:
+            reasons.append("invalid risk")
         if opportunity.category == "arbitrage" and opportunity.net_edge < min_net_edge:
             reasons.append(f"net edge below threshold: {opportunity.net_edge:.4%}")
         if opportunity.confidence < min_confidence:
@@ -103,8 +114,19 @@ class OpportunityEngine:
 
     @staticmethod
     def score(o: Opportunity) -> float:
-        edge = max(0.0, min(1.0, o.net_edge * 10.0))
-        return round(0.35 * o.confidence + 0.25 * o.liquidity + 0.25 * edge + 0.15 * (1.0 - o.risk), 6)
+        """Return a 0..1 quality score.
+
+        Edge is normalized conservatively: a 2% net edge contributes the full
+        edge component, while confidence, liquidity and inverse risk dominate.
+        """
+        edge = max(0.0, min(1.0, o.net_edge / 0.02))
+        return round(
+            0.40 * o.confidence
+            + 0.25 * o.liquidity
+            + 0.20 * edge
+            + 0.15 * (1.0 - o.risk),
+            6,
+        )
 
     def consensus(self, opportunity: Opportunity, validators: Iterable[str], required: int = 2) -> bool:
         ids = list(dict.fromkeys([*opportunity.agents, *validators]))
@@ -113,7 +135,13 @@ class OpportunityEngine:
         self._audit("consensus", opportunity, f"validators={len(ids)} required={required} result={ok}")
         return ok
 
-    def should_alert(self, opportunity: Opportunity, *, critical_score: float = 0.88, high_score: float = 0.78) -> str | None:
+    def should_alert(
+        self,
+        opportunity: Opportunity,
+        *,
+        critical_score: float = 0.88,
+        high_score: float = 0.70,
+    ) -> str | None:
         if opportunity.status != "validated":
             return None
         if opportunity.category == "arbitrage" and opportunity.net_edge < 0.005:
@@ -127,9 +155,19 @@ class OpportunityEngine:
         return None
 
     def _audit(self, event: str, opportunity: Opportunity, reason: str = "") -> None:
-        record = {"timestamp": time.time(), "event": event, "reason": reason, "opportunity": asdict(opportunity), "net_edge": opportunity.net_edge}
+        record = {
+            "timestamp": time.time(),
+            "event": event,
+            "reason": reason,
+            "opportunity": asdict(opportunity),
+            "net_edge": opportunity.net_edge,
+        }
         with self.audit_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, separators=(",", ":")) + "\n")
 
     def snapshot(self) -> dict:
-        return {"stats": dict(self.stats), "opportunities": len(self.opportunities), "audit_path": str(self.audit_path)}
+        return {
+            "stats": dict(self.stats),
+            "opportunities": len(self.opportunities),
+            "audit_path": str(self.audit_path),
+        }
