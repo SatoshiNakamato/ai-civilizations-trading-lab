@@ -25,13 +25,13 @@ class TradingCivilizationV1:
     pipeline does not move treasury funds.
     """
     EXECUTORS = ("A001", "A002", "A003", "A004")
-    def __init__(self, runtime=None, agents=None, data_dir="data/civilization"):
+    def __init__(self, runtime=None, agents=None, data_dir="data/civilization", bankr_live=None):
         self.data_dir=data_dir; os.makedirs(data_dir, exist_ok=True); self.runtime=runtime
         self.agents=agents or [f"A{i:03d}" for i in range(1,101)]
         self.arbitrage=ContinuousArbitrage(runtime=runtime, agents=self.agents) if runtime else None
         self.audit=AuditLog(os.path.join(data_dir,"lifecycle.jsonl")); self.portfolio=Portfolio(); self.metrics=StrategyMetrics()
         self.risk=RiskGovernor(); self.alerts=AlertGate(); self.research=AutonomousResearchEngine(); self.tickers=TickerBrain()
-        self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl")); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
+        self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl"), live=bankr_live); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
 
     def cycle(self):
         self.cycle_count += 1
