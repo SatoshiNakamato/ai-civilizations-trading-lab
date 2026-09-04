@@ -125,18 +125,12 @@ class BankrTokenAgent:
         return [self.verify_agent(a, timeout) for a in AGENT_BANKR_KEYS]
 
     def wallet_portfolio(self, agent: str, chain: str = "base", timeout: int = 20) -> dict:
-        """Return authenticated wallet portfolio data for live-launch diagnostics."""
         key = os.getenv(self.credential_env(agent))
         if not key:
             return {"ok": False, "error": f"{self.credential_env(agent)} is not configured"}
-        req = urllib.request.Request(
-            f"{self.PORTFOLIO_ENDPOINT}?chains={urllib.parse.quote(chain)}",
-            headers={"Accept": "application/json", **self._auth_headers(key)},
-            method="GET",
-        )
+        req = urllib.request.Request(f"{self.PORTFOLIO_ENDPOINT}?chains={urllib.parse.quote(chain)}", headers={"Accept": "application/json", **self._auth_headers(key)}, method="GET")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                body = json.loads(response.read().decode())
+            with urllib.request.urlopen(req, timeout=timeout) as response: body = json.loads(response.read().decode())
             data = body.get("balances", {}).get(chain, {})
             return {"ok": True, "chain": chain, "native_balance": str(data.get("nativeBalance", "")), "native_usd": str(data.get("nativeUsd", ""))}
         except urllib.error.HTTPError as exc:
@@ -154,21 +148,20 @@ class BankrTokenAgent:
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError): return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        records: list[dict] = []
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
+                records = []
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
                     if item.get("status") != "deployed": continue
-                    try: float(item.get("created_at", 0))
+                    try: created = float(item.get("created_at", 0))
                     except (TypeError, ValueError): continue
-                    records.append(item)
+                    records.append((item, created))
         except OSError: return 0
-        if now is None:
-            now = time.time()
+        now = time.time() if now is None else now
         cutoff = now - 86400
-        return sum(1 for item in records if cutoff <= float(item.get("created_at", 0)) <= now)
+        return sum(1 for item, created in records if cutoff <= created <= now)
 
     def _last_deployment_time(self, agent: str | None = None) -> float:
         latest = 0.0
@@ -225,9 +218,12 @@ class BankrTokenAgent:
                 detail = self._error_detail(exc); failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(f"Bankr deployment rejected: {detail}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
                 detail = f"{type(exc).__name__}: {exc}"; failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(f"Bankr deployment transport/response error: {detail}") from exc
-            if body.get("simulated") is True or not body.get("txHash", body.get("tx_hash", "")):
-                detail = "Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast"; failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed); raise RuntimeError(detail)
-            result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time(); result.token_address = str(body.get("tokenAddress", body.get("token_address", ""))); result.tx_hash = str(body.get("txHash", body.get("tx_hash", ""))); self._audit(result); return result
+            token_address = str(body.get("tokenAddress", body.get("token_address", "")))
+            tx_hash = str(body.get("txHash", body.get("tx_hash", "")))
+            simulation = bool(body.get("simulated") is True or body.get("simulateOnly") is True or body.get("simulation") is True or not tx_hash)
+            if simulation:
+                partial = TokenPlan(**asdict(plan)); partial.status = "partial_simulation"; partial.token_address = token_address; partial.tx_hash = tx_hash; partial.error = "Bankr returned a simulation/no-transaction response; token is not proven deployed"; partial.created_at = time.time(); self._audit(partial); return partial
+            result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time(); result.token_address = token_address; result.tx_hash = tx_hash; self._audit(result); return result
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN); lock_handle.close()
 

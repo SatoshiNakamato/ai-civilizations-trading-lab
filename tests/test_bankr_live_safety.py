@@ -3,7 +3,7 @@ import json
 from markets.bankr_token_agent import BankrTokenAgent
 
 
-def test_live_deploy_rejects_simulation_response(monkeypatch, tmp_path):
+def test_live_deploy_marks_simulation_response_partial(monkeypatch, tmp_path):
     monkeypatch.setenv("BANKR_API_KEY_1", "bk_usr_test_secret")
     agent = BankrTokenAgent(str(tmp_path / "audit.jsonl"), live=True)
     plan = agent.plan("A001", "Test", "TEST", "research", 0.9, "base", risk=0.1)
@@ -17,15 +17,17 @@ def test_live_deploy_rejects_simulation_response(monkeypatch, tmp_path):
     monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout=0: Response())
     monkeypatch.setattr("time.time", lambda: 1000.0)
 
-    try:
-        agent.deploy(plan)
-    except RuntimeError as exc:
-        assert "simulation/no-transaction" in str(exc)
-    else:
-        raise AssertionError("live deployment must never accept a simulated response")
+    result = agent.deploy(plan)
 
-    # A simulation/no-transaction response is not a successful deployment and
-    # therefore must not consume the shared deployment quota.
+    # A simulation/no-transaction response is explicitly represented as a
+    # partial lifecycle result so the end-to-end pipeline can hand it to the
+    # deployment-verification stage instead of treating it as a successful
+    # deployment.
+    assert result.status == "partial_simulation"
+    assert result.token_address == "0x123"
+    assert "simulation/no-transaction" in result.error
+
+    # It must not consume the successful deployment quota.
     assert agent.deployments_today() == 0
 
 
