@@ -24,11 +24,16 @@ def test_live_deploy_rejects_simulation_response(monkeypatch, tmp_path):
     else:
         raise AssertionError("live deployment must never accept a simulated response")
 
-    assert agent.deployments_today() == 1
+    # A simulation/no-transaction response is not a successful deployment and
+    # therefore must not consume the shared deployment quota.
+    assert agent.deployments_today() == 0
 
 
-def test_shared_attempt_quota_counts_failed_live_attempt(tmp_path):
+def test_failed_live_attempt_does_not_consume_deployment_quota(tmp_path):
     audit = tmp_path / "audit.jsonl"
-    audit.write_text("".join(json.dumps({"status": "attempted", "created_at": 1000 + i}) + "\n" for i in range(3)))
+    audit.write_text("".join(
+        json.dumps({"status": "attempted", "created_at": 1000 + i}) + "\n"
+        for i in range(3)
+    ))
     agent = BankrTokenAgent(str(audit), live=True)
-    assert agent.deployments_today() == 3
+    assert agent.deployments_today(now=1003.0) == 0
