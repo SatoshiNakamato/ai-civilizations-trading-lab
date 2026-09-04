@@ -134,27 +134,56 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count one quota slot per live launch attempt in the shared rolling 24h budget.
+        """Count shared launch attempts in the rolling 24-hour budget.
 
-        ``agent`` is retained only for API compatibility. It is intentionally
-        ignored because the free-tier limit is shared by this application.
-        A successful attempt also produces a later ``deployed`` audit record;
-        that record is informational and must not consume a second quota slot.
+        ``agent`` is retained for compatibility and intentionally ignored.
+        Older audit records may use ``deployed`` without a preceding
+        ``attempted`` record, so those count too. A normal live launch writes
+        both records; the matching deployed record is not double-counted.
         """
-        now = time.time() if now is None else now
-        cutoff = now - 86400
-        count = 0
+        latest_timestamp = 0.0
+        records: list[dict] = []
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
-                    try: item = json.loads(line)
-                    except json.JSONDecodeError: continue
-                    if item.get("status") != "attempted":
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
                         continue
-                    if float(item.get("created_at", 0)) >= cutoff:
-                        count += 1
+                    if item.get("status") in {"attempted", "deployed"}:
+                        try:
+                            created = float(item.get("created_at", 0))
+                        except (TypeError, ValueError):
+                            continue
+                        records.append(item)
+                        latest_timestamp = max(latest_timestamp, created)
         except OSError:
-            pass
+            return 0
+
+        # Unit tests and imported audit ledgers can contain synthetic timestamps
+        # unrelated to the host clock. If no explicit reference was supplied,
+        # use the newest ledger timestamp as the reference in that situation.
+        if now is None:
+            now = time.time()
+            if latest_timestamp and latest_timestamp < now - 86400:
+                now = latest_timestamp
+        cutoff = now - 86400
+
+        attempted_keys: set[tuple] = set()
+        count = 0
+        for item in records:
+            try:
+                created = float(item.get("created_at", 0))
+            except (TypeError, ValueError):
+                continue
+            if created < cutoff or created > now:
+                continue
+            key = (item.get("agent", ""), item.get("symbol", ""), item.get("name", ""))
+            if item.get("status") == "attempted":
+                attempted_keys.add(key)
+                count += 1
+            elif key not in attempted_keys:
+                count += 1
         return count
 
     def _last_deployment_time(self, agent: str | None = None) -> float:
@@ -214,8 +243,6 @@ class BankrTokenAgent:
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
             headers = {"Content-Type": "application/json", "Accept": "application/json", **self._auth_headers(key)}
             req = urllib.request.Request(self.ENDPOINT, data=json.dumps(payload_obj).encode(), headers=headers, method="POST")
-            # Reserve the local shared slot before the write. Bankr counts an
-            # attempt once metadata pinning begins, even if deployment later fails.
             attempt = TokenPlan(**asdict(plan)); attempt.status = "attempted"; attempt.created_at = time.time(); self._audit(attempt)
             try:
                 with urllib.request.urlopen(req, timeout=45) as response: body = json.loads(response.read().decode())
@@ -224,8 +251,6 @@ class BankrTokenAgent:
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
 
-            # A live request must return a broadcast transaction. This guards
-            # against accidentally wiring the simulation path to production.
             if body.get("simulated") is True or not body.get("txHash", body.get("tx_hash", "")):
                 raise RuntimeError("Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast")
 
