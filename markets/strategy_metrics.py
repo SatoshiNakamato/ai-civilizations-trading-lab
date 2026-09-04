@@ -18,3 +18,10 @@ class StrategyBook:
     def __init__(self): self.stats={}
     def record(self,name,value): self.stats.setdefault(name,StrategyStats()).record(value)
     def top(self,n=3): return sorted(self.stats.items(),key=lambda x:x[1].score,reverse=True)[:n]
+
+# Backwards-compatible public name used by the hosted civilization runtime.
+# StrategyBook remains the implementation; StrategyMetrics is the stable facade name.
+class StrategyMetrics(StrategyBook):
+    pass
+
+__all__ = ["StrategyStats", "StrategyBook", "StrategyMetrics"]
