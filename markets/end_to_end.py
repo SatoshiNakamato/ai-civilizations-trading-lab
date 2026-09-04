@@ -20,9 +20,10 @@ class LifecycleEvent:
 class TradingCivilizationV1:
     """100-agent public research -> meme concept -> launch-intent pipeline.
 
-    A001-A004 are execution identities. Bankr keys remain in the host
-    environment and the Bankr adapter exposes token launches only. The
-    pipeline does not move treasury funds.
+    A001-A004 are execution identities. Each eligible executor uses its own
+    research thesis and Bankr credential. The application enforces one shared
+    three-launch rolling-24h budget automatically so four agents cannot turn
+    into four launches.
     """
     EXECUTORS = ("A001", "A002", "A003", "A004")
     def __init__(self, runtime=None, agents=None, data_dir="data/civilization", bankr_live=None):
@@ -55,11 +56,17 @@ class TradingCivilizationV1:
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]; bankr_plans=[]; intents=[]
         shared_quota=getattr(self.bankr,"MAX_LAUNCHES_PER_ROLLING_DAY",3)
-        for o in execution[:1]:
+        quota_used=self.bankr.deployments_today()
+        slots=max(0, shared_quota-quota_used)
+        # In live mode, fill only the remaining shared slots with independent
+        # executor research. In simulation mode retain one representative launch
+        # to keep the default test/demo behavior lightweight.
+        candidates=execution[:slots if self.bankr.live else 1]
+        for o in candidates:
             agent=o.hypothesis.agent
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
-            plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
+            plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain,risk=o.hypothesis.risk)
             quota_used=self.bankr.deployments_today()
             if self.bankr.live and quota_used >= shared_quota:
                 plan.status="deferred"; self.bankr._audit(plan)
@@ -80,7 +87,7 @@ class TradingCivilizationV1:
         telemetry.stage("deployment_policy","ok",len(intents),"deployment policy evaluated survivors")
         telemetry.stage("launch_intent","ok",len([x for x in intents if x["allowed"]]),"launch intents produced after research and risk gates")
         if any(x.get("status")=="deployed" for x in deployments):
-            bankr_status="deployed"; bankr_detail="autonomous Bankr token-launch execution"
+            bankr_status="deployed"; bankr_detail=f"autonomous Bankr token-launch execution ({len(deployments)} launch{'es' if len(deployments)!=1 else ''})"
         elif any(x.get("status")=="deferred" for x in bankr_plans):
             bankr_status="deferred"; bankr_detail="Bankr launch deferred by automatic quota gate"
         elif self.bankr.live and intents:
