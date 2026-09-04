@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# Allow direct execution from the repository root with `python scripts/test_email_alert.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from civilizations.email_alerts import AlertCandidate, EmailAlertGateway
 
 candidate = AlertCandidate(
