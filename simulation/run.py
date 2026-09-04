@@ -42,7 +42,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     data_dir = Path(os.getenv("CIVILIZATION_DATA_DIR", "data/civilization"))
-    interval = max(1.0, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
+    # Allow sub-second intervals for smoke/integration tests; the normal default
+    # remains 30 seconds for hosted operation.
+    interval = max(0.05, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
     count = max(1, _int_env("CIVILIZATION_AGENT_COUNT", 100))
     agents = [f"A{i:03d}" for i in range(1, count + 1)]
     state_path = data_dir / "worker_state.json"
@@ -106,7 +108,7 @@ def main() -> int:
         print(f"CYCLE {cycle} COMPLETE status={'degraded' if error else 'ok'} agents={count}", flush=True)
         deadline = time.monotonic() + max(0.0, interval - (time.time() - started))
         while not STOP and time.monotonic() < deadline:
-            time.sleep(min(1.0, max(0.01, deadline - time.monotonic())))
+            time.sleep(min(0.25, max(0.01, deadline - time.monotonic())))
 
     try:
         _write_json(heartbeat_path, {"status": "stopped", "cycle": cycle, "stopped_at": time.time()})
