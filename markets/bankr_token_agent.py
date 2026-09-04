@@ -101,6 +101,10 @@ class BankrTokenAgent:
         return [self.verify_agent(a, timeout) for a in AGENT_BANKR_KEYS]
 
     def recent_symbols(self, timeout: int = 10) -> set[str]:
+        # Simulation must stay offline/fast. Live mode may consult Bankr to
+        # avoid reusing symbols already known to the launch service.
+        if not self.live:
+            return set()
         req = urllib.request.Request(self.LAUNCHES_ENDPOINT, headers={"Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response: body = json.loads(response.read().decode())
