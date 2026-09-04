@@ -13,6 +13,7 @@ STOP = False
 def _stop(_signum, _frame):
     global STOP
     STOP = True
+    raise SystemExit(0)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -42,9 +43,10 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     data_dir = Path(os.getenv("CIVILIZATION_DATA_DIR", "data/civilization"))
-    interval = max(1.0, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
+    interval = max(0.05, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
     count = max(1, _int_env("CIVILIZATION_AGENT_COUNT", 100))
     agents = [f"A{i:03d}" for i in range(1, count + 1)]
+    bankr_live = os.getenv("BANKR_LIVE_DEPLOY") == "1"
     state_path = data_dir / "worker_state.json"
     heartbeat_path = data_dir / "heartbeat.json"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +57,7 @@ def main() -> int:
     try:
         from civilizations.orchestrator import CivilizationOrchestrator
         from markets.end_to_end import TradingCivilizationV1
-        civilization = TradingCivilizationV1(runtime=None, agents=agents, data_dir=str(data_dir))
+        civilization = TradingCivilizationV1(runtime=None, agents=agents, data_dir=str(data_dir), bankr_live=bankr_live)
         orchestrator = CivilizationOrchestrator({"trading_civilization": civilization})
     except BaseException as exc:
         startup_error = f"{type(exc).__name__}: {exc}"
@@ -85,7 +87,7 @@ def main() -> int:
             if orchestrator is None:
                 from civilizations.orchestrator import CivilizationOrchestrator
                 from markets.end_to_end import TradingCivilizationV1
-                civilization = TradingCivilizationV1(runtime=None, agents=agents, data_dir=str(data_dir))
+                civilization = TradingCivilizationV1(runtime=None, agents=agents, data_dir=str(data_dir), bankr_live=bankr_live)
                 civilization.cycle_count = cycle - 1
                 orchestrator = CivilizationOrchestrator({"trading_civilization": civilization})
                 orchestrator.state.cycles = cycle - 1
@@ -93,6 +95,8 @@ def main() -> int:
             cycle = civilization.cycle_count
             startup_error = None
             error = None
+        except SystemExit:
+            raise
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
             print(f"CYCLE ERROR cycle={cycle} {error}", flush=True)
@@ -106,7 +110,7 @@ def main() -> int:
         print(f"CYCLE {cycle} COMPLETE status={'degraded' if error else 'ok'} agents={count}", flush=True)
         deadline = time.monotonic() + max(0.0, interval - (time.time() - started))
         while not STOP and time.monotonic() < deadline:
-            time.sleep(min(1.0, max(0.01, deadline - time.monotonic())))
+            time.sleep(min(0.25, max(0.01, deadline - time.monotonic())))
 
     try:
         _write_json(heartbeat_path, {"status": "stopped", "cycle": cycle, "stopped_at": time.time()})
