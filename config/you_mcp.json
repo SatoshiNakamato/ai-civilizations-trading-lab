@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "you-com": {
+      "url": "https://api.you.com/mcp?profile=free"
+    }
+  },
+  "policy": {
+    "tool": "you-search",
+    "daily_limit": 100,
+    "credentials_required": false,
+    "cache_before_search": true,
+    "shared_results": true
+  }
+}
