@@ -31,8 +31,18 @@ class TokenPlan:
     created_at: float = 0.0
 
 
+@dataclass
+class BankrAuthResult:
+    agent: str
+    configured: bool
+    authenticated: bool
+    status_code: int | None = None
+    account_address: str = ""
+    error: str = ""
+
+
 class BankrTokenAgent:
-    """Bankr integration with a safe dry-run default.
+    """Bankr integration with safe dry-run default.
 
     Each execution agent maps to its own local Bankr API-key environment variable.
     Credentials are never stored in the repository or exposed to research agents.
@@ -40,6 +50,9 @@ class BankrTokenAgent:
     """
 
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
+    # Authentication/account endpoint used only for credential verification.
+    # It never submits a token deployment.
+    AUTH_ENDPOINT = "https://api.bankr.bot/user"
 
     def __init__(self, audit_path="data/bankr_token_plans.jsonl", live=None):
         self.audit_path = audit_path
@@ -66,11 +79,46 @@ class BankrTokenAgent:
     def configured_agents(cls) -> dict[str, bool]:
         return {agent: bool(os.getenv(env_name)) for agent, env_name in AGENT_BANKR_KEYS.items()}
 
+    def verify_agent(self, agent: str, timeout: int = 20) -> BankrAuthResult:
+        """Verify one Bankr key without creating or deploying anything."""
+        agent = agent.upper()
+        env_name = self.credential_env(agent)
+        key = os.getenv(env_name)
+        if not key:
+            return BankrAuthResult(agent, False, False, error=f"{env_name} is not configured")
+
+        request = urllib.request.Request(
+            self.AUTH_ENDPOINT,
+            headers={"Accept": "application/json", "X-API-Key": key},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read().decode(errors="replace")
+                try:
+                    body = json.loads(raw)
+                except json.JSONDecodeError:
+                    body = {}
+                address = str(
+                    body.get("address", body.get("walletAddress", body.get("wallet_address", "")))
+                )
+                return BankrAuthResult(agent, True, 200 <= response.status < 300,
+                                       status_code=response.status, account_address=address)
+        except urllib.error.HTTPError as exc:
+            # Do not include response body: it can contain account/security details.
+            return BankrAuthResult(agent, True, False, status_code=exc.code,
+                                   error=f"HTTP {exc.code}")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return BankrAuthResult(agent, True, False, error=f"{type(exc).__name__}: {exc}")
+
+    def verify_all_agents(self, timeout: int = 20) -> list[BankrAuthResult]:
+        return [self.verify_agent(agent, timeout=timeout) for agent in AGENT_BANKR_KEYS]
+
     def plan(self, agent, name, symbol, thesis, score, chain="base"):
         chain = chain.lower()
         if chain not in {"base", "robinhood"}:
             raise ValueError("Bankr token launch chain must be base or robinhood")
-        plan = TokenPlan(agent, name[:100], self.normalize_symbol(symbol), chain,
+        plan = TokenPlan(agent.upper(), name[:100], self.normalize_symbol(symbol), chain,
                          thesis[:500], float(score), created_at=time.time())
         self._audit(plan)
         return plan
