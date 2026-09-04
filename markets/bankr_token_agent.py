@@ -24,6 +24,7 @@ class TokenPlan:
     tx_hash: str = ""
     created_at: float = 0.0
     risk: float = 0.0
+    error: str = ""
 
 @dataclass
 class BankrAuthResult:
@@ -37,15 +38,14 @@ class BankrAuthResult:
 class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
-    Keys stay in the host environment. Execution identities may research and
-    author launches independently, while the free-tier allowance is a single
-    shared budget: at most three *successful* deployments in any rolling
-    24-hour window. Failed API calls, rejected launches, and simulation/no-tx
-    responses do not consume the deployment allowance. The quota gate is
-    automatic and serialized across workers.
+    Keys stay in the host environment. The free-tier allowance is a single
+    shared budget: at most three counted launch attempts in any rolling 24h.
+    Bankr itself decides whether an attempt is countable; this local ledger
+    counts only responses that actually contain a transaction hash.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
+    PORTFOLIO_ENDPOINT = "https://api.bankr.bot/wallet/portfolio"
     LAUNCHES_ENDPOINT = "https://api.bankr.bot/token-launches"
     MAX_LAUNCHES_PER_ROLLING_DAY = 3
     DEPLOY_COOLDOWN_SECONDS = 60
@@ -124,6 +124,26 @@ class BankrTokenAgent:
     def verify_all_agents(self, timeout: int = 20) -> list[BankrAuthResult]:
         return [self.verify_agent(a, timeout) for a in AGENT_BANKR_KEYS]
 
+    def wallet_portfolio(self, agent: str, chain: str = "base", timeout: int = 20) -> dict:
+        """Return authenticated wallet portfolio data for live-launch diagnostics."""
+        key = os.getenv(self.credential_env(agent))
+        if not key:
+            return {"ok": False, "error": f"{self.credential_env(agent)} is not configured"}
+        req = urllib.request.Request(
+            f"{self.PORTFOLIO_ENDPOINT}?chains={urllib.parse.quote(chain)}",
+            headers={"Accept": "application/json", **self._auth_headers(key)},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                body = json.loads(response.read().decode())
+            data = body.get("balances", {}).get(chain, {})
+            return {"ok": True, "chain": chain, "native_balance": str(data.get("nativeBalance", "")), "native_usd": str(data.get("nativeUsd", ""))}
+        except urllib.error.HTTPError as exc:
+            return {"ok": False, "status_code": exc.code, "error": self._error_detail(exc)}
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
     def recent_symbols(self, timeout: int = 10) -> set[str]:
         if not self.live:
             return set()
@@ -136,47 +156,26 @@ class BankrTokenAgent:
             return set()
 
     def deployments_today(self, agent: str | None = None, now: float | None = None) -> int:
-        """Count successful deployments in the shared rolling 24-hour budget.
-
-        ``agent`` is retained for compatibility and intentionally ignored.
-        ``attempted`` audit records are lifecycle telemetry only and do not
-        consume the quota. A deployment is counted only when its audit record
-        has status ``deployed``. This lets a failed/rejected launch be retried
-        without incorrectly exhausting the free-account allowance.
-        """
         latest_timestamp = 0.0
         records: list[dict] = []
         try:
             with open(self.audit_path, encoding="utf-8") as handle:
                 for line in handle:
-                    try:
-                        item = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+                    try: item = json.loads(line)
+                    except json.JSONDecodeError: continue
                     if item.get("status") != "deployed":
                         continue
-                    try:
-                        created = float(item.get("created_at", 0))
-                    except (TypeError, ValueError):
-                        continue
-                    records.append(item)
-                    latest_timestamp = max(latest_timestamp, created)
+                    try: created = float(item.get("created_at", 0))
+                    except (TypeError, ValueError): continue
+                    records.append(item); latest_timestamp = max(latest_timestamp, created)
         except OSError:
             return 0
-
-        # Unit tests and imported audit ledgers can contain synthetic timestamps
-        # unrelated to the host clock. If no explicit reference was supplied,
-        # use the newest ledger timestamp as the reference in that situation.
         if now is None:
             now = time.time()
             if latest_timestamp and latest_timestamp < now - 86400:
                 now = latest_timestamp
         cutoff = now - 86400
-        return sum(
-            1
-            for item in records
-            if cutoff <= float(item.get("created_at", 0)) <= now
-        )
+        return sum(1 for item in records if cutoff <= float(item.get("created_at", 0)) <= now)
 
     def _last_deployment_time(self, agent: str | None = None) -> float:
         latest = 0.0
@@ -185,11 +184,9 @@ class BankrTokenAgent:
                 for line in handle:
                     try: item = json.loads(line)
                     except json.JSONDecodeError: continue
-                    if item.get("status") != "attempted":
-                        continue
+                    if item.get("status") != "attempted": continue
                     latest = max(latest, float(item.get("created_at", 0)))
-        except OSError:
-            pass
+        except OSError: pass
         return latest
 
     def cooldown_remaining(self, agent: str | None = None, now: float | None = None) -> float:
@@ -200,8 +197,7 @@ class BankrTokenAgent:
         lock_handle = open(self.lock_path, "a+", encoding="utf-8")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         remaining = self.cooldown_remaining(agent)
-        if remaining > 0:
-            time.sleep(remaining)
+        if remaining > 0: time.sleep(remaining)
         return lock_handle
 
     def plan(self, agent, name, symbol, thesis, score, chain="robinhood", risk=0.0):
@@ -217,19 +213,14 @@ class BankrTokenAgent:
         if not self.live: return self.simulate(plan)
         key = os.getenv(self.credential_env(plan.agent))
         if not key: raise RuntimeError(f"{self.credential_env(plan.agent)} is required for live deployment")
-
         is_partner = key.strip().startswith("bk_ptr_")
-        if is_partner and plan.chain != "base":
-            raise RuntimeError("Bankr partner-key deployments are Base-only")
-        if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip():
-            raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
-
+        if is_partner and plan.chain != "base": raise RuntimeError("Bankr partner-key deployments are Base-only")
+        if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip(): raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
         lock_handle = self._acquire_deploy_gate(plan.agent)
         try:
             used = self.deployments_today()
             if used >= self.MAX_LAUNCHES_PER_ROLLING_DAY:
-                raise RuntimeError(f"Bankr free-account launch quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
-
+                raise RuntimeError(f"Bankr local success quota reached: {used}/{self.MAX_LAUNCHES_PER_ROLLING_DAY} in rolling 24h")
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
@@ -239,20 +230,20 @@ class BankrTokenAgent:
             try:
                 with urllib.request.urlopen(req, timeout=45) as response: body = json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
-                raise RuntimeError(f"Bankr deployment failed: {self._error_detail(exc)}") from exc
+                detail = self._error_detail(exc)
+                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
+                raise RuntimeError(f"Bankr deployment rejected: {detail}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-                raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
-
+                detail = f"{type(exc).__name__}: {exc}"
+                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
+                raise RuntimeError(f"Bankr deployment transport/response error: {detail}") from exc
             if body.get("simulated") is True or not body.get("txHash", body.get("tx_hash", "")):
-                raise RuntimeError("Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast")
-
-            result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time()
-            result.token_address = str(body.get("tokenAddress", body.get("token_address", "")))
-            result.tx_hash = str(body.get("txHash", body.get("tx_hash", "")))
-            self._audit(result); return result
+                detail = "Bankr returned a simulation/no-transaction response for a live deployment; no token was broadcast"
+                failed = TokenPlan(**asdict(plan)); failed.status = "failed"; failed.error = detail; failed.created_at = time.time(); self._audit(failed)
+                raise RuntimeError(detail)
+            result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time(); result.token_address = str(body.get("tokenAddress", body.get("token_address", ""))); result.tx_hash = str(body.get("txHash", body.get("tx_hash", ""))); self._audit(result); return result
         finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            lock_handle.close()
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN); lock_handle.close()
 
     def _audit(self, plan):
         with open(self.audit_path, "a", encoding="utf-8") as handle: handle.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
