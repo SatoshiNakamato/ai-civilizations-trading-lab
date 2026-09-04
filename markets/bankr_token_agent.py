@@ -36,15 +36,12 @@ class BankrAuthResult:
 class BankrTokenAgent:
     """Bankr token-launch execution layer for A001-A004.
 
-    Keys stay in the host environment. The application only calls the token
-    launch endpoint. Wallet-transfer/sign/submit capabilities are intentionally
-    not used here; configure the Bankr keys with tokenLaunchApiEnabled and keep
-    wallet write access disabled.
+    Keys stay in the host environment. User keys use X-API-Key; partner keys
+    use X-Partner-Key as required by Bankr. Wallet-transfer/sign/submit
+    capabilities are not used here.
 
-    Live launches are globally serialized: after one successful deployment,
-    every agent/account must wait 60 seconds before another deployment can
-    start. The cooldown is persisted in the audit log, so restarting the worker
-    does not reset the one-minute launch gate.
+    Live launches are globally serialized and limited to three counted launch
+    attempts per rolling 24 hours for each signing wallet.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -77,11 +74,37 @@ class BankrTokenAgent:
     def configured_agents(cls) -> dict[str, bool]:
         return {a: bool(os.getenv(k)) for a, k in AGENT_BANKR_KEYS.items()}
 
+    @staticmethod
+    def _auth_headers(key: str) -> dict[str, str]:
+        key = key.strip()
+        if key.startswith("bk_ptr_"):
+            return {"X-Partner-Key": key}
+        return {"X-API-Key": key}
+
+    @staticmethod
+    def _error_detail(exc: urllib.error.HTTPError) -> str:
+        try:
+            raw = exc.read().decode(errors="replace").strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            return f"HTTP {exc.code}"
+        try:
+            body = json.loads(raw)
+            if isinstance(body, dict):
+                message = body.get("message") or body.get("error")
+                if message:
+                    return f"HTTP {exc.code}: {message}"
+        except json.JSONDecodeError:
+            pass
+        return f"HTTP {exc.code}: {raw[:500]}"
+
     def verify_agent(self, agent: str, timeout: int = 20) -> BankrAuthResult:
         agent = agent.upper(); env_name = self.credential_env(agent); key = os.getenv(env_name)
         if not key:
             return BankrAuthResult(agent, False, False, error=f"{env_name} is not configured")
-        req = urllib.request.Request(self.AUTH_ENDPOINT, headers={"Accept": "application/json", "X-API-Key": key}, method="GET")
+        headers = {"Accept": "application/json", **self._auth_headers(key)}
+        req = urllib.request.Request(self.AUTH_ENDPOINT, headers=headers, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 raw = response.read().decode(errors="replace")
@@ -93,7 +116,7 @@ class BankrTokenAgent:
                         if str(wallet.get("chain", "")).lower() == "evm": address = str(wallet.get("address", "")); break
                 return BankrAuthResult(agent, True, 200 <= response.status < 300, response.status, address)
         except urllib.error.HTTPError as exc:
-            return BankrAuthResult(agent, True, False, exc.code, error=f"HTTP {exc.code}")
+            return BankrAuthResult(agent, True, False, exc.code, error=self._error_detail(exc))
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             return BankrAuthResult(agent, True, False, error=f"{type(exc).__name__}: {exc}")
 
@@ -144,11 +167,6 @@ class BankrTokenAgent:
         return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time()))
 
     def _acquire_deploy_gate(self):
-        """Acquire the global lock and wait for any active cooldown.
-
-        The wait is deliberately inside the inter-process lock so two agents
-        cannot both observe the same expired cooldown and launch together.
-        """
         lock_handle = open(self.lock_path, "a+", encoding="utf-8")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         remaining = self.cooldown_remaining()
@@ -173,16 +191,25 @@ class BankrTokenAgent:
         key = os.getenv(self.credential_env(plan.agent))
         if not key: raise RuntimeError(f"{self.credential_env(plan.agent)} is required for live deployment")
 
+        is_partner = key.strip().startswith("bk_ptr_")
+        if is_partner and plan.chain != "base":
+            raise RuntimeError("Bankr partner-key deployments are Base-only")
+        if is_partner and not os.getenv("BANKR_FEE_RECIPIENT", "").strip():
+            raise RuntimeError("BANKR_FEE_RECIPIENT is required when using a Bankr partner key")
+
         lock_handle = self._acquire_deploy_gate()
         try:
             payload_obj = {"tokenName": plan.name, "tokenSymbol": plan.symbol, "description": plan.thesis, "chain": plan.chain, "quoteOnlyFees": True, "simulateOnly": False}
             recipient = os.getenv("BANKR_FEE_RECIPIENT", "").strip()
             if recipient: payload_obj["feeRecipient"] = {"type": "wallet", "value": recipient}
-            req = urllib.request.Request(self.ENDPOINT, data=json.dumps(payload_obj).encode(), headers={"Content-Type": "application/json", "Accept": "application/json", "X-API-Key": key}, method="POST")
+            headers = {"Content-Type": "application/json", "Accept": "application/json", **self._auth_headers(key)}
+            req = urllib.request.Request(self.ENDPOINT, data=json.dumps(payload_obj).encode(), headers=headers, method="POST")
             try:
                 with urllib.request.urlopen(req, timeout=45) as response: body = json.loads(response.read().decode())
-            except urllib.error.HTTPError as exc: raise RuntimeError(f"Bankr deployment failed: HTTP {exc.code}") from exc
-            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc: raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"Bankr deployment failed: {self._error_detail(exc)}") from exc
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"Bankr deployment failed: {type(exc).__name__}: {exc}") from exc
             result = TokenPlan(**asdict(plan)); result.status = "deployed"; result.created_at = time.time()
             result.token_address = str(body.get("tokenAddress", body.get("token_address", "")))
             result.tx_hash = str(body.get("txHash", body.get("tx_hash", "")))
