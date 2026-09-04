@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 FREE_MCP_URL = "https://api.you.com/mcp?profile=free"
 CACHE_PATH = Path(os.getenv("AI_CIVILIZATION_YOU_CACHE", "~/.local/state/ai-civilization/you_mcp_cache.json")).expanduser()
@@ -22,12 +21,12 @@ class SearchResult:
 
 
 class YouMCPResearch:
-    """Small MCP HTTP client for You.com's keyless free search profile.
+    """Budget-aware boundary for You.com's keyless MCP search profile.
 
-    The free profile exposes search only. It intentionally does not accept or
-    persist an API key. The client caches identical requests and applies a
-    local daily query budget so continuous agents cannot accidentally exhaust
-    the advertised free allowance.
+    The hosted free profile exposes ``you-search`` and requires an MCP-capable
+    client. This module deliberately does not fake an MCP request with ordinary
+    HTTP. It provides endpoint configuration, caching, and accounting for the
+    real MCP client.
     """
 
     def __init__(self, endpoint: str = FREE_MCP_URL, daily_limit: int = 100,
@@ -36,9 +35,9 @@ class YouMCPResearch:
         self.daily_limit = daily_limit
         self.cache_path = cache_path
         self._lock = Lock()
-        self._cache = self._load_cache()
+        self._state = self._load()
 
-    def _load_cache(self) -> dict:
+    def _load(self) -> dict:
         try:
             data = json.loads(self.cache_path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
@@ -48,72 +47,55 @@ class YouMCPResearch:
     def _save(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.cache_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._cache, indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
         tmp.replace(self.cache_path)
 
     @staticmethod
     def _day() -> str:
         return time.strftime("%Y-%m-%d", time.localtime())
 
-    def _bucket(self) -> dict:
-        day = self._day()
-        return self._cache.setdefault("days", {}).setdefault(day, {"queries": 0})
+    def _day_state(self) -> dict:
+        return self._state.setdefault("days", {}).setdefault(self._day(), {"queries": 0})
 
-    @staticmethod
-    def _extract_results(payload: object, query: str) -> list[SearchResult]:
-        # MCP responses vary by transport/client version. Accept common JSON
-        # shapes without pretending that every returned object is a search hit.
-        items = []
-        if isinstance(payload, dict):
-            for key in ("results", "web", "data"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    items = value
-                    break
-            if not items and isinstance(payload.get("content"), list):
-                items = payload["content"]
-        results: list[SearchResult] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or item.get("name") or "")
-            url = str(item.get("url") or item.get("link") or "")
-            snippet = str(item.get("snippet") or item.get("description") or item.get("text") or "")
-            if url and urlparse(url).scheme in {"http", "https"}:
-                results.append(SearchResult(query, title, url, snippet))
-        return results
+    def cached(self, query: str) -> list[SearchResult] | None:
+        key = " ".join(query.split()).lower()
+        items = self._state.get("results", {}).get(key)
+        if not items:
+            return None
+        return [SearchResult(**item) for item in items]
 
-    def search(self, query: str, *, timeout: int = 30) -> list[SearchResult]:
-        query = " ".join(query.split())
-        if not query:
-            raise ValueError("query must not be empty")
-        cache_key = query.lower()
+    def can_search(self) -> bool:
+        return int(self._day_state().get("queries", 0)) < self.daily_limit
+
+    def reserve_query(self) -> bool:
+        """Reserve one free-tier search immediately before the real MCP call."""
         with self._lock:
-            cached = self._cache.get("results", {}).get(cache_key)
-            if cached:
-                return [SearchResult(**x) for x in cached]
-            bucket = self._bucket()
-            if int(bucket.get("queries", 0)) >= self.daily_limit:
-                raise RuntimeError("free You.com MCP daily search budget exhausted")
+            bucket = self._day_state()
+            used = int(bucket.get("queries", 0))
+            if used >= self.daily_limit:
+                return False
+            bucket["queries"] = used + 1
+            self._save()
+            return True
 
-            # Streamable HTTP MCP requires an MCP client/session for arbitrary
-            # tool calls; this class intentionally exposes the transport boundary
-            # rather than pretending a normal POST is an MCP tool invocation.
-            # A compatible MCP client can use the same endpoint/config below.
-            bucket["queries"] = int(bucket.get("queries", 0)) + 1
+    def store(self, query: str, results: list[SearchResult]) -> None:
+        key = " ".join(query.split()).lower()
+        clean: list[dict] = []
+        for result in results:
+            if result.url and urlparse(result.url).scheme in {"http", "https"}:
+                clean.append({"query": result.query, "title": result.title,
+                              "url": result.url, "snippet": result.snippet})
+        with self._lock:
+            self._state.setdefault("results", {})[key] = clean
             self._save()
 
-        raise RuntimeError(
-            "MCP transport requires an MCP-capable client; configure the endpoint "
-            f"{self.endpoint} and call the you-search tool. No API key is required."
-        )
+    def connection_config(self) -> dict:
+        return {"mcpServers": {"you-com": {"url": self.endpoint}}}
 
     def snapshot(self) -> dict:
-        return {
-            "endpoint": self.endpoint,
-            "daily_limit": self.daily_limit,
-            "date": self._day(),
-            "queries_reserved": int(self._bucket().get("queries", 0)),
-            "cached_queries": len(self._cache.get("results", {})),
-            "credentials_required": False,
-        }
+        used = int(self._day_state().get("queries", 0))
+        return {"endpoint": self.endpoint, "daily_limit": self.daily_limit,
+                "date": self._day(), "queries_used": used,
+                "queries_remaining": max(0, self.daily_limit - used),
+                "cached_queries": len(self._state.get("results", {})),
+                "credentials_required": False, "tool": "you-search"}
