@@ -111,6 +111,8 @@ def _weighted_buy(asks: Iterable[tuple[float, float]], quantity: float) -> float
     remaining = quantity
     cost = 0.0
     for price, size in asks:
+        if price <= 0 or size <= 0:
+            continue
         take = min(remaining, size)
         cost += take * price
         remaining -= take
@@ -123,6 +125,8 @@ def _weighted_sell(bids: Iterable[tuple[float, float]], quantity: float) -> floa
     remaining = quantity
     proceeds = 0.0
     for price, size in bids:
+        if price <= 0 or size <= 0:
+            continue
         take = min(remaining, size)
         proceeds += take * price
         remaining -= take
@@ -206,8 +210,16 @@ class LiveArbitrageScanner:
         return max(candidates, key=lambda o: o.net_edge)
 
     def scan_once(self) -> Opportunity | None:
-        books = self.feed.order_books()
-        candidate = self.from_order_books(books, fee_schedule=self.fees)
+        # Prefer depth-aware data, but retain compatibility with lightweight
+        # quote-feed implementations used by tests and simulations.
+        if hasattr(self.feed, "order_books"):
+            books = self.feed.order_books()
+            candidate = self.from_order_books(books, fee_schedule=self.fees)
+        else:
+            candidate = self.from_quotes(self.feed.snapshot())
+            if candidate is not None:
+                candidate.fees = self.fees.for_venue(candidate.buy_venue) + self.fees.for_venue(candidate.sell_venue)
+
         if candidate is None:
             return None
         candidate = self.engine.discover(candidate)
@@ -219,8 +231,8 @@ class LiveArbitrageScanner:
             if severity in {"HIGH", "CRITICAL"}:
                 self.alert_gateway.send(AlertCandidate(
                     title=candidate.summary, category="arbitrage", summary=(
-                        f"Validated live order-book opportunity. Buy {candidate.buy_venue} at "
-                        f"~{candidate.buy_price:.2f}; sell {candidate.sell_venue} at ~{candidate.sell_price:.2f}. "
+                        f"Validated live opportunity. Buy {candidate.buy_venue} at ~{candidate.buy_price:.2f}; "
+                        f"sell {candidate.sell_venue} at ~{candidate.sell_price:.2f}. "
                         f"Estimated net edge: {candidate.net_edge:.2%}. Research-only; do not execute automatically."
                     ), confidence=candidate.confidence, edge=candidate.net_edge,
                     risk=candidate.risk, sources=tuple(candidate.sources), agent="LIVE-ORDERBOOK-FEED",
