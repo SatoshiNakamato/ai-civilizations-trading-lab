@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from civilizations.live_arbitrage import LiveArbitrageScanner, PublicQuoteFeed, Quote
 from civilizations.opportunities import OpportunityEngine
+from civilizations.email_alerts import EmailAlertGateway
 from markets.paper_execution import PaperExecutionEngine
 from markets.trader_leaderboard import TraderLeaderboard
 
@@ -14,7 +15,9 @@ class ArbitrageRuntime:
     @classmethod
     def build(cls, audit_path="data/arbitrage_audit.jsonl", fills_path="data/paper_fills.jsonl"):
         engine=OpportunityEngine(audit_path)
-        return cls(LiveArbitrageScanner(PublicQuoteFeed(), engine), PaperExecutionEngine(fills_path), TraderLeaderboard())
+        gateway=EmailAlertGateway()
+        scanner=LiveArbitrageScanner(PublicQuoteFeed(), engine, alert_gateway=gateway)
+        return cls(scanner, PaperExecutionEngine(fills_path), TraderLeaderboard())
 
     def scan_and_open(self, agent="ARB-TRADER"):
         opportunity=self.scanner.scan_once()
@@ -36,4 +39,4 @@ class ArbitrageRuntime:
         return closed
 
     def snapshot(self):
-        return {"paper":self.paper.snapshot(),"leaderboard":self.leaderboard.snapshot(),"scanner":self.scanner.snapshot()}
+        return {"paper":self.paper.snapshot(),"leaderboard":self.leaderboard.snapshot(),"scanner":self.scanner.snapshot(),"email_alerts":self.scanner.alert_gateway.snapshot() if self.scanner.alert_gateway else {"enabled":False}}
