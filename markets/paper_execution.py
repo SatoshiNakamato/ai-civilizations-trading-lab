@@ -23,21 +23,21 @@ class PaperFill:
     closed_at: float = 0.0
 
 class PaperExecutionEngine:
-    """Simulated fills only. No exchange credentials or live orders."""
+    """Simulated fills only, with restart-safe lifecycle persistence."""
     def __init__(self, path="data/paper_fills.jsonl"):
         self.path=Path(path); self.path.parent.mkdir(parents=True, exist_ok=True)
         self.open_fills={}; self.closed=[]
+        self._restore()
 
     def open(self, opportunity, agent="SYSTEM", quantity=1.0):
         fid=f"fill-{opportunity.opportunity_id}-{int(time.time()*1000)}"
+        while fid in self.open_fills or any(x.fill_id == fid for x in self.closed):
+            fid += "-1"
         fill=PaperFill(fid,opportunity.opportunity_id,agent,opportunity.asset,opportunity.buy_venue,opportunity.sell_venue,opportunity.buy_price,opportunity.sell_price,quantity=quantity,fees=opportunity.fees+opportunity.slippage,opened_at=time.time())
         self.open_fills[fid]=fill; self._write("opened",fill); return fill
 
     def mark(self, fill_id, buy_price, sell_price):
         fill=self.open_fills[fill_id]; fill.exit_buy=float(buy_price); fill.exit_sell=float(sell_price)
-        # A convergence trade profits when the quoted spread narrows.
-        # Entry spread = sell venue bid/offer advantage minus cheap leg.
-        # Exit spread is what remains when both hedged legs are unwound.
         entry_spread=fill.entry_sell-fill.entry_buy
         exit_spread=fill.exit_sell-fill.exit_buy
         gross=(entry_spread-exit_spread)*fill.quantity
@@ -62,3 +62,17 @@ class PaperExecutionEngine:
 
     def _write(self,event,fill):
         with self.path.open("a",encoding="utf-8") as f: f.write(json.dumps({"event":event,"timestamp":time.time(),"fill":asdict(fill)})+"\n")
+
+    def _restore(self):
+        try:
+            with self.path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    try: record=json.loads(line); fill_data=record["fill"]; fill=PaperFill(**fill_data)
+                    except (json.JSONDecodeError, KeyError, TypeError): continue
+                    if record.get("event") == "opened" and fill.status == "open":
+                        self.open_fills[fill.fill_id]=fill
+                    elif record.get("event") == "closed" or fill.status == "closed":
+                        self.open_fills.pop(fill.fill_id,None)
+                        if not any(x.fill_id == fill.fill_id for x in self.closed): self.closed.append(fill)
+        except OSError:
+            return
