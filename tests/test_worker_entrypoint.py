@@ -11,6 +11,9 @@ def test_worker_module_smoke(tmp_path):
     env["CIVILIZATION_DATA_DIR"] = str(tmp_path)
     env["CIVILIZATION_CYCLE_INTERVAL"] = "0.25"
     env["CIVILIZATION_AGENT_COUNT"] = "4"
+    # The smoke test must never inherit a caller's live-deploy setting or
+    # attempt a real Bankr request while validating worker lifecycle behavior.
+    env["BANKR_LIVE_DEPLOY"] = "0"
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "simulation.run"],
