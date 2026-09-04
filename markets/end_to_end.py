@@ -19,13 +19,7 @@ class LifecycleEvent:
     cycle: int; stage: str; agent: str; status: str; payload: dict; created_at: float
 
 class TradingCivilizationV1:
-    """Continuous multi-agent research, paper arbitrage and alert pipeline.
-
-    The 100-agent civilization researches and debates ideas every cycle. High-
-    quality alpha candidates and validated cross-venue arbitrage opportunities
-    are attributed to their source agents and sent through the existing
-    opt-in email gateway. Bankr remains isolated from the research/alert path.
-    """
+    """Continuous multi-agent research, paper arbitrage and alert pipeline."""
     EXECUTORS = ("A001", "A002", "A003", "A004")
 
     def __init__(self, runtime=None, agents=None, data_dir="data/civilization"):
@@ -38,12 +32,13 @@ class TradingCivilizationV1:
 
     @staticmethod
     def _as_payload(value):
-        """Serialize real dataclasses and lightweight test doubles alike."""
-        if is_dataclass(value):
-            return asdict(value)
-        if hasattr(value, "__dict__"):
-            return dict(vars(value))
+        if is_dataclass(value): return asdict(value)
+        if hasattr(value, "__dict__"): return dict(vars(value))
         return value
+
+    @staticmethod
+    def _result_status(result):
+        return getattr(result, "status", "unknown")
 
     def _send_alpha_alerts(self, opportunities):
         sent = 0
@@ -51,25 +46,32 @@ class TradingCivilizationV1:
             h=o.hypothesis
             confidence=min(0.99, h.evidence * .75 + o.debate.survival_score * .25)
             edge=max(0.0, o.risk_adjusted - .60)
-            candidate=AlertCandidate(
-                title=f"{h.ticker} alpha candidate",
-                category="alpha-token",
+            candidate=AlertCandidate(title=f"{h.ticker} alpha candidate", category="alpha-token",
                 summary=(f"Agent {h.agent} produced a high-ranked {h.ticker} hypothesis: {h.thesis}. "
                          f"Risk-adjusted score={o.risk_adjusted:.3f}; evidence={o.evidence_score:.3f}; "
                          f"debate survival={o.debate.survival_score:.3f}."),
                 confidence=confidence, edge=edge, risk=h.risk,
-                sources=tuple(getattr(h, "sources", ()) or ()), agent=h.agent,
-            )
-            if self.email.send(candidate):
-                sent += 1
+                sources=tuple(getattr(h, "sources", ()) or ()), agent=h.agent)
+            if self.email.send(candidate): sent += 1
         return sent
+
+    def _send_arbitrage_alert(self, arb_result):
+        if not arb_result: return 0
+        opened=getattr(arb_result, "opened", 0); closed=getattr(arb_result, "closed", 0)
+        realized=float(getattr(arb_result, "realized_pnl", 0.0) or 0.0)
+        if not opened and not closed and realized <= 0: return 0
+        confidence=0.95 if opened else 0.90
+        candidate=AlertCandidate(title="Arbitrage opportunity detected", category="arbitrage",
+            summary=(f"Cross-venue arbitrage scan opened {opened} paper position(s), closed {closed}, "
+                     f"with realized paper PnL={realized:.6f}. Review the live quote details and attribution ledger."),
+            confidence=confidence, edge=max(0.005, abs(realized)), risk=0.25, agent="SYSTEM")
+        return 1 if self.email.send(candidate) else 0
 
     def cycle(self):
         self.cycle_count += 1
         telemetry=CycleTelemetry(self.cycle_count,len(self.agents))
         print(f"CYCLE {self.cycle_count} START agents={len(self.agents)}",flush=True)
-        opportunities=self.research.cycle(self.agents,self.cycle_count)
-        top=opportunities[:3]
+        opportunities=self.research.cycle(self.agents,self.cycle_count); top=opportunities[:3]
         for o in top:
             h=o.hypothesis
             self._event("research",h.agent,"produced",{"ticker":h.ticker,"hypothesis_id":h.hypothesis_id,"score":h.score,"thesis":h.thesis})
@@ -79,45 +81,36 @@ class TradingCivilizationV1:
         telemetry.stage("hypotheses","ok",len(opportunities),"independent hypotheses generated")
         telemetry.stage("debate","ok",len(opportunities),"adversarial challenge pass executed")
         telemetry.stage("evidence","ok",len(top),"evidence scoring completed")
+        alpha_alerts=self._send_alpha_alerts(top); telemetry.stage("alerts","ok",alpha_alerts,"high-value alpha alerts delivered")
 
-        alpha_alerts=self._send_alpha_alerts(top)
-        telemetry.stage("alerts","ok",alpha_alerts,"high-value alpha alerts delivered")
-
-        arb_result=None
+        arb_result=None; arb_alerts=0
         try:
             arb_result=self.arbitrage.cycle()
-            if arb_result.opened or arb_result.closed:
-                self._event("arbitrage","SYSTEM","cycle",self._as_payload(arb_result))
-            telemetry.stage("arbitrage","ok",arb_result.opened,"live public quotes scanned; paper fills only")
+            if getattr(arb_result,"opened",0) or getattr(arb_result,"closed",0): self._event("arbitrage","SYSTEM","cycle",self._as_payload(arb_result))
+            arb_alerts=self._send_arbitrage_alert(arb_result)
+            telemetry.stage("arbitrage","ok",getattr(arb_result,"opened",0),"live public quotes scanned; paper fills only")
+            if arb_alerts: telemetry.stage("arbitrage_alert","ok",arb_alerts,"profitable arbitrage alert delivered")
         except Exception as exc:
-            self._event("arbitrage","SYSTEM","error",{"error":f"{type(exc).__name__}: {exc}"})
-            telemetry.stage("arbitrage","error",0,"arbitrage scan unavailable; research pipeline continued")
+            self._event("arbitrage","SYSTEM","error",{"error":f"{type(exc).__name__}: {exc}"}); telemetry.stage("arbitrage","error",0,"arbitrage scan unavailable; research pipeline continued")
 
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]
         for o in execution[:1]:
-            agent=o.hypothesis.agent; ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
-            chain="robinhood" if self.cycle_count % 2 else "base"
+            agent=o.hypothesis.agent; ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing); chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
             decision=self.deployment_policy.evaluate(plan,deployments_today=self.bankr.deployments_today(agent),authenticated=self.bankr.credential_configured(agent))
             self._event("risk",agent,"approved" if decision.allowed else "blocked",{"allowed":decision.allowed,"reason":decision.reason,"ticker":ticker.symbol,"ticker_score":ticker.score})
             if not decision.allowed: continue
-            try:
-                result=self.bankr.deploy(plan) if self.bankr.live else self.bankr.simulate(plan)
-            except Exception as exc:
-                self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":f"{type(exc).__name__}: {exc}"}); continue
-            deployments.append(asdict(result)); existing.add(ticker.symbol)
-            self._event("bankr",agent,result.status,{"ticker":ticker.symbol,"chain":chain,"token_address":result.token_address,"tx_hash":result.tx_hash})
-        telemetry.stage("risk","ok",len(execution),"risk governor evaluated candidates")
-        telemetry.stage("deployment_policy","ok",len(execution),"deployment policy evaluated survivors")
-        telemetry.stage("bankr","deployed" if any(x["status"]=="deployed" for x in deployments) else ("simulated" if deployments else "idle"),len(deployments),"autonomous Bankr token-launch execution")
+            try: result=self.bankr.deploy(plan) if self.bankr.live else self.bankr.simulate(plan)
+            except Exception as exc: self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":f"{type(exc).__name__}: {exc}"}); continue
+            deployments.append(self._as_payload(result)); existing.add(ticker.symbol); self._event("bankr",agent,self._result_status(result),{"ticker":ticker.symbol,"chain":chain,"token_address":getattr(result,"token_address",""),"tx_hash":getattr(result,"tx_hash","")})
+        telemetry.stage("risk","ok",len(execution),"risk governor evaluated candidates"); telemetry.stage("deployment_policy","ok",len(execution),"deployment policy evaluated survivors")
+        telemetry.stage("bankr","deployed" if any(x.get("status")=="deployed" for x in deployments) else ("simulated" if deployments else "idle"),len(deployments),"autonomous Bankr token-launch execution")
         telemetry.stage("on_chain_observation","pending" if deployments else "idle",len(deployments),"launches queued for observation")
-        telemetry.stage("pnl","ok",0,"portfolio accounting available")
-        telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
-        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot(),"alerts":{"email":self.email.snapshot(),"alpha_sent":alpha_alerts},"arbitrage":self._as_payload(arb_result) if arb_result else None}
+        telemetry.stage("pnl","ok",0,"portfolio accounting available"); telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
+        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot(),"alerts":{"email":self.email.snapshot(),"alpha_sent":alpha_alerts,"arbitrage_sent":arb_alerts},"arbitrage":self._as_payload(arb_result) if arb_result else None}
         result["telemetry"]=telemetry.snapshot(); self._event("cycle","SYSTEM","completed",result); telemetry.log(); return result
 
     def _event(self,stage,agent,status,payload): self.audit.append("lifecycle",**asdict(LifecycleEvent(self.cycle_count,stage,agent,status,payload,time.time())))
-    def snapshot(self):
-        return {"cycles":self.cycle_count,"agents":len(self.agents),"arbitrage":self.arbitrage.snapshot() if self.arbitrage else None,"research":self.research.snapshot(),"portfolio":self.portfolio.snapshot(),"risk":{"exposure":self.risk.exposure,"daily_pnl":self.risk.daily_pnl,"halted":self.risk.halted},"bankr":self.bankr.snapshot(),"alerts":{"email":self.email.snapshot()}}
+    def snapshot(self): return {"cycles":self.cycle_count,"agents":len(self.agents),"arbitrage":self.arbitrage.snapshot() if self.arbitrage else None,"research":self.research.snapshot(),"portfolio":self.portfolio.snapshot(),"risk":{"exposure":self.risk.exposure,"daily_pnl":self.risk.daily_pnl,"halted":self.risk.halted},"bankr":self.bankr.snapshot(),"alerts":{"email":self.email.snapshot()}}
