@@ -46,23 +46,27 @@ class ResearchRuntime:
         if snippets:
             self.contradictions.compare(task.topic,snippets); self.stats.contradictions=self.contradictions.snapshot()['count']
 
+    def _fallback(self, task, source='budget-fallback'):
+        results=self.fallback.search(task.question); self.stats.fallback_calls+=1
+        return results, source
+
     def _execute(self,task):
         cached=self.researcher.cached(task.question)
         if cached is not None: self.stats.cache_hits+=1; return cached,'cache'
-        if not self.budget.reserve(task.topic):
-            results=self.fallback.search(task.question); self.stats.fallback_calls+=1
-            return results,'budget-fallback'
-        if not self.researcher.can_search():
-            results=self.fallback.search(task.question); self.stats.fallback_calls+=1
-            return results,'limit-fallback'
+        if not self.budget.reserve(task.topic): return self._fallback(task)
+        if not self.researcher.can_search(): return self._fallback(task, 'limit-fallback')
         try:
             results=self.researcher.search(task.question); self.stats.provider_calls+=1; return results,'you.com'
         except Exception:
             self.stats.retried+=1
+            # A retry is a second provider request, so it needs its own
+            # category budget reservation. If the allocation is exhausted,
+            # fall back instead of silently exceeding the 50/50 policy.
+            if not self.budget.reserve(task.topic): return self._fallback(task)
             try:
                 results=self.researcher.search(task.question+' latest'); self.stats.provider_calls+=1; return results,'you.com-retry'
             except Exception:
-                results=self.fallback.search(task.question); self.stats.fallback_calls+=1; return results,'duckduckgo-fallback'
+                return self._fallback(task, 'duckduckgo-fallback')
 
     @staticmethod
     def _estimated_edge(text: str) -> float:
