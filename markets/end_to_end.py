@@ -35,8 +35,13 @@ class TradingCivilizationV1:
         self.bankr=BankrTokenAgent(os.path.join(data_dir,"bankr_token_plans.jsonl")); self.deployment_policy=DeploymentPolicy(); self.cycle_count=0
 
     def cycle(self):
-        self.cycle_count += 1; telemetry=CycleTelemetry(self.cycle_count,len(self.agents)); print(f"CYCLE {self.cycle_count} START agents={len(self.agents)}",flush=True)
-        opportunities=self.research.cycle(self.agents,self.cycle); top=opportunities[:3]
+        self.cycle_count += 1
+        telemetry=CycleTelemetry(self.cycle_count,len(self.agents))
+        print(f"CYCLE {self.cycle_count} START agents={len(self.agents)}",flush=True)
+        # Pass the integer cycle counter. Passing self.cycle (the bound method)
+        # causes downstream arithmetic such as cycle * 3 to fail at runtime.
+        opportunities=self.research.cycle(self.agents,self.cycle_count)
+        top=opportunities[:3]
         for o in top:
             h=o.hypothesis
             self._event("research",h.agent,"produced",{"ticker":h.ticker,"hypothesis_id":h.hypothesis_id,"score":h.score,"thesis":h.thesis})
