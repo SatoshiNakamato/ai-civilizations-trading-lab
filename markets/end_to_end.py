@@ -18,12 +18,11 @@ class LifecycleEvent:
     cycle: int; stage: str; agent: str; status: str; payload: dict; created_at: float
 
 class TradingCivilizationV1:
-    """Continuous research, debate, risk-gated token-launch civilization.
+    """100-agent public research -> meme concept -> launch-intent pipeline.
 
-    A001-A004 are the only execution identities. Their Bankr keys are read
-    exclusively from host environment variables and are never persisted.
-    The Bankr integration is limited to token launches; this class exposes no
-    wallet transfer/withdraw/signing operation.
+    A001-A004 are execution identities. Bankr keys remain in the host
+    environment and the Bankr adapter exposes token launches only. The
+    pipeline does not move treasury funds.
     """
     EXECUTORS = ("A001", "A002", "A003", "A004")
     def __init__(self, runtime=None, agents=None, data_dir="data/civilization"):
@@ -38,8 +37,6 @@ class TradingCivilizationV1:
         self.cycle_count += 1
         telemetry=CycleTelemetry(self.cycle_count,len(self.agents))
         print(f"CYCLE {self.cycle_count} START agents={len(self.agents)}",flush=True)
-        # Pass the integer cycle counter. Passing self.cycle (the bound method)
-        # causes downstream arithmetic such as cycle * 3 to fail at runtime.
         opportunities=self.research.cycle(self.agents,self.cycle_count)
         top=opportunities[:3]
         for o in top:
@@ -48,19 +45,26 @@ class TradingCivilizationV1:
             self._event("debate",h.agent,"challenged",asdict(o.debate)); self._event("evidence",h.agent,"verified",{"score":o.evidence_score})
             self._event("ranking",h.agent,"ranked",{"risk_adjusted":o.risk_adjusted})
         telemetry.stage("research","ok",len(self.agents),"public-data-aware autonomous research executed")
+        telemetry.stage("signals","ok",len(self.research.last_signals),"X-compatible/public meme and news signals collected")
         telemetry.stage("hypotheses","ok",len(opportunities),"independent hypotheses generated")
         telemetry.stage("debate","ok",len(opportunities),"adversarial challenge pass executed")
         telemetry.stage("evidence","ok",len(top),"evidence scoring completed")
+
+        # Only executor identities can reach Bankr. A launch candidate must
+        # survive the research score/risk gate; no candidate is fabricated when
+        # public signal collection or research produces nothing.
         execution=[o for o in opportunities if o.hypothesis.agent in self.EXECUTORS and o.risk_adjusted >= .62 and o.hypothesis.risk <= .35]
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
-        existing=self.bankr.recent_symbols(); deployments=[]
-        # At most one launch per cycle across all four credentials.
+        existing=self.bankr.recent_symbols(); deployments=[]; intents=[]
         for o in execution[:1]:
-            agent=o.hypothesis.agent; ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
+            agent=o.hypothesis.agent
+            ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
             decision=self.deployment_policy.evaluate(plan,deployments_today=self.bankr.deployments_today(agent),authenticated=self.bankr.credential_configured(agent))
-            self._event("risk",agent,"approved" if decision.allowed else "blocked",{"allowed":decision.allowed,"reason":decision.reason,"ticker":ticker.symbol,"ticker_score":ticker.score})
+            intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":decision.allowed,"reason":decision.reason}
+            intents.append(intent)
+            self._event("launch_intent",agent,"approved" if decision.allowed else "blocked",intent)
             if not decision.allowed: continue
             try:
                 result=self.bankr.deploy(plan) if self.bankr.live else self.bankr.simulate(plan)
@@ -69,12 +73,13 @@ class TradingCivilizationV1:
             deployments.append(asdict(result)); existing.add(ticker.symbol)
             self._event("bankr",agent,result.status,{"ticker":ticker.symbol,"chain":chain,"token_address":result.token_address,"tx_hash":result.tx_hash})
         telemetry.stage("risk","ok",len(execution),"risk governor evaluated candidates")
-        telemetry.stage("deployment_policy","ok",len(execution),"deployment policy evaluated survivors")
+        telemetry.stage("deployment_policy","ok",len(intents),"deployment policy evaluated survivors")
+        telemetry.stage("launch_intent","ok",len([x for x in intents if x["allowed"]]),"launch intents produced after research and risk gates")
         telemetry.stage("bankr","deployed" if any(x["status"]=="deployed" for x in deployments) else ("simulated" if deployments else "idle"),len(deployments),"autonomous Bankr token-launch execution")
         telemetry.stage("on_chain_observation","pending" if deployments else "idle",len(deployments),"launches queued for observation")
         telemetry.stage("pnl","ok",0,"portfolio accounting available")
         telemetry.stage("learning","ok",len(self.metrics.stats),"strategy book available")
-        result={"cycle":self.cycle_count,"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot()}
+        result={"cycle":self.cycle_count,"signals":len(self.research.last_signals),"opportunities":[{"agent":o.hypothesis.agent,"ticker":o.hypothesis.ticker,"hypothesis_id":o.hypothesis.hypothesis_id,"score":o.hypothesis.score,"debate_survival":o.debate.survival_score,"evidence":o.evidence_score,"risk_adjusted":o.risk_adjusted} for o in top],"launch_intents":intents,"execution_intents":deployments,"bankr_plans":deployments,"portfolio":self.portfolio.snapshot()}
         result["telemetry"]=telemetry.snapshot(); self._event("cycle","SYSTEM","completed",result); telemetry.log(); return result
 
     def _event(self,stage,agent,status,payload): self.audit.append("lifecycle",**asdict(LifecycleEvent(self.cycle_count,stage,agent,status,payload,time.time())))
