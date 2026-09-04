@@ -59,18 +59,23 @@ class TradingCivilizationV1:
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain)
-            bankr_plans.append(asdict(plan))
             authenticated=(not self.bankr.live) or self.bankr.credential_configured(agent)
             decision=self.deployment_policy.evaluate(plan,deployments_today=self.bankr.deployments_today(agent),authenticated=authenticated)
             intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":decision.allowed,"reason":decision.reason}
             intents.append(intent)
             self._event("launch_intent",agent,"approved" if decision.allowed else "blocked",intent)
-            if not decision.allowed: continue
+            if not decision.allowed:
+                bankr_plans.append(asdict(plan))
+                continue
             try:
                 result=self.bankr.deploy(plan) if self.bankr.live else self.bankr.simulate(plan)
             except Exception as exc:
-                self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":f"{type(exc).__name__}: {exc}"}); continue
-            deployments.append(asdict(result)); existing.add(ticker.symbol)
+                self._event("bankr",agent,"error",{"ticker":ticker.symbol,"error":f"{type(exc).__name__}: {exc}"})
+                bankr_plans.append(asdict(plan))
+                continue
+            result_dict=asdict(result)
+            bankr_plans.append(result_dict)
+            deployments.append(result_dict); existing.add(ticker.symbol)
             self._event("bankr",agent,result.status,{"ticker":ticker.symbol,"chain":chain,"token_address":result.token_address,"tx_hash":result.tx_hash})
         telemetry.stage("risk","ok",len(execution),"risk governor evaluated candidates")
         telemetry.stage("deployment_policy","ok",len(intents),"deployment policy evaluated survivors")
