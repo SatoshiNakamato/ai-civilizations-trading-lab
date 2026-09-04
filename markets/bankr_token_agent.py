@@ -42,9 +42,9 @@ class BankrTokenAgent:
     wallet write access disabled.
 
     Live launches are globally serialized: after one successful deployment,
-    every agent/account waits 60 seconds before another deployment can start.
-    The cooldown is persisted in the audit log, so restarting the worker does
-    not reset the one-minute launch gate.
+    every agent/account must wait 60 seconds before another deployment can
+    start. The cooldown is persisted in the audit log, so restarting the worker
+    does not reset the one-minute launch gate.
     """
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
     AUTH_ENDPOINT = "https://api.bankr.bot/wallet/me"
@@ -101,8 +101,6 @@ class BankrTokenAgent:
         return [self.verify_agent(a, timeout) for a in AGENT_BANKR_KEYS]
 
     def recent_symbols(self, timeout: int = 10) -> set[str]:
-        # Simulation must stay offline/fast. Live mode may consult Bankr to
-        # avoid reusing symbols already known to the launch service.
         if not self.live:
             return set()
         req = urllib.request.Request(self.LAUNCHES_ENDPOINT, headers={"Accept": "application/json"})
@@ -141,12 +139,23 @@ class BankrTokenAgent:
             pass
         return latest
 
+    def cooldown_remaining(self, now: float | None = None) -> float:
+        now = time.time() if now is None else now
+        return max(0.0, self.DEPLOY_COOLDOWN_SECONDS - (now - self._last_deployment_time()))
+
     def _acquire_deploy_gate(self):
+        """Acquire the global lock without blocking the worker for 60 seconds.
+
+        A second launch is deferred by the caller when the cooldown is active;
+        the worker remains responsive to SIGTERM and can continue research.
+        """
         lock_handle = open(self.lock_path, "a+", encoding="utf-8")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        remaining = self.DEPLOY_COOLDOWN_SECONDS - (time.time() - self._last_deployment_time())
+        remaining = self.cooldown_remaining()
         if remaining > 0:
-            time.sleep(remaining)
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+            raise RuntimeError(f"global Bankr launch cooldown active: {remaining:.1f}s remaining")
         return lock_handle
 
     def plan(self, agent, name, symbol, thesis, score, chain="robinhood"):
@@ -188,4 +197,4 @@ class BankrTokenAgent:
         with open(self.audit_path, "a", encoding="utf-8") as handle: handle.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
 
     def snapshot(self):
-        return {"live": self.live, "audit_path": self.audit_path, "configured_agents": self.configured_agents(), "deploy_cooldown_seconds": self.DEPLOY_COOLDOWN_SECONDS}
+        return {"live": self.live, "audit_path": self.audit_path, "configured_agents": self.configured_agents(), "deploy_cooldown_seconds": self.DEPLOY_COOLDOWN_SECONDS, "cooldown_remaining": self.cooldown_remaining()}
