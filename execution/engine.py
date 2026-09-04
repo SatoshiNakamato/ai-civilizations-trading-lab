@@ -33,9 +33,9 @@ class ExecutionConfig:
 class LiveExecutionEngine:
     """Guarded real-money order coordinator.
 
-    This class deliberately does not store API credentials. The exchange adapter
-    owns credential access. Every order gets a deterministic idempotency key and
-    an append-only execution record so restarts cannot silently duplicate orders.
+    Credentials stay inside the exchange adapter. Every order receives a
+    deterministic idempotency key and an append-only audit record so a restart
+    cannot silently submit the same intent twice.
     """
 
     def __init__(self, adapter, audit_path="data/live_execution.jsonl", config=None, clock=time.time):
@@ -82,9 +82,30 @@ class LiveExecutionEngine:
     def daily_realized_pnl(self):
         return sum(float(r.get("pnl", 0)) for r in self._day_records() if r.get("event") == "position_closed")
 
+    def position_amount(self, symbol):
+        amount = 0.0
+        for r in self._records:
+            if r.get("event") != "order_submitted" or r.get("symbol") != symbol:
+                continue
+            sign = 1.0 if r.get("side") == "buy" else -1.0
+            amount += sign * float(r.get("amount", 0))
+        return amount
+
     def _idempotency_key(self, symbol, side, amount, client_ref):
         raw = f"{symbol}|{side}|{amount:.12f}|{client_ref}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    def _check_slippage(self, symbol, side, estimated_price):
+        ticker = self.adapter.ticker(symbol)
+        market_price = ticker.get("ask") if side == "buy" else ticker.get("bid")
+        if market_price is None:
+            market_price = ticker.get("last")
+        if not market_price:
+            raise RuntimeError("exchange returned no usable market price")
+        deviation_bps = abs(float(market_price) - estimated_price) / estimated_price * 10000
+        if deviation_bps > self.config.slippage_bps:
+            raise RuntimeError(f"slippage guard rejected order: {deviation_bps:.1f} bps > {self.config.slippage_bps:.1f} bps")
+        return float(market_price)
 
     def market_order(self, symbol: str, side: str, amount: float, estimated_price: float, client_ref: str) -> dict[str, Any]:
         if self.halted:
@@ -93,19 +114,28 @@ class LiveExecutionEngine:
             raise RuntimeError("LIVE_TRADING_CONFIRMATION must equal I_UNDERSTAND_LIVE_RISK")
         if amount <= 0 or estimated_price <= 0:
             raise ValueError("amount and estimated_price must be positive")
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+
         notional = amount * estimated_price
         if notional > self.config.max_order_quote:
             raise RuntimeError(f"order exceeds max quote size: {notional:.2f} > {self.config.max_order_quote:.2f}")
+        signed_after = self.position_amount(symbol) + (amount if side == "buy" else -amount)
+        if abs(signed_after * estimated_price) > self.config.max_position_quote:
+            raise RuntimeError("position quote limit reached")
         if self.daily_notional() + notional > self.config.max_daily_notional:
             raise RuntimeError("daily live notional limit reached")
         if self.daily_realized_pnl() <= -self.config.max_daily_loss:
             self.kill("daily loss limit")
             raise RuntimeError("daily live loss limit reached")
+
         key = self._idempotency_key(symbol, side, amount, client_ref)
         prior = next((r for r in self._records if r.get("event") == "order_submitted" and r.get("idempotency_key") == key), None)
         if prior:
             return {"status": "already_submitted", **prior}
-        self._append("order_intent", idempotency_key=key, symbol=symbol, side=side, amount=amount, estimated_price=estimated_price, notional=notional)
+
+        market_price = self._check_slippage(symbol, side, estimated_price)
+        self._append("order_intent", idempotency_key=key, symbol=symbol, side=side, amount=amount, estimated_price=estimated_price, market_price=market_price, notional=notional)
         result = self.adapter.create_market_order(symbol, side, amount)
         record = self._append("order_submitted", idempotency_key=key, symbol=symbol, side=side, amount=result.amount, price=result.price, notional=notional, order_id=result.order_id, status=result.status)
         return {"status": "submitted", **record}
