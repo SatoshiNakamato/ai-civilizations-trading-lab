@@ -1,6 +1,32 @@
 import json
+from types import SimpleNamespace
 
 from markets.end_to_end import TradingCivilizationV1
+
+
+def _eligible_opportunity(agent="A001"):
+    hypothesis = SimpleNamespace(
+        agent=agent,
+        ticker="BTC",
+        hypothesis_id="test-hypothesis",
+        thesis="agent-authored deployment thesis",
+        score=0.9,
+        risk=0.2,
+    )
+    debate = SimpleNamespace(
+        hypothesis_id="test-hypothesis",
+        supporters=8,
+        challengers=2,
+        objections=("test objection",),
+        survival_score=0.85,
+    )
+    return SimpleNamespace(
+        hypothesis=hypothesis,
+        debate=debate,
+        evidence_score=0.9,
+        rank_score=0.85,
+        risk_adjusted=0.75,
+    )
 
 
 def test_live_pipeline_skips_after_shared_three_launch_quota(monkeypatch, tmp_path):
@@ -13,16 +39,18 @@ def test_live_pipeline_skips_after_shared_three_launch_quota(monkeypatch, tmp_pa
         data_dir=str(tmp_path),
         bankr_live=True,
     )
+    civ.research.cycle = lambda agents, cycle: [_eligible_opportunity("A001")]
+    civ.research.last_signals = []
 
-    # Seed three successful launches in the shared audit ledger. The fourth
-    # agent must be deferred by the pipeline rather than making a fourth API call.
+    # Seed three successful launches in the shared audit ledger. The next
+    # eligible agent must be deferred by the pipeline rather than making a
+    # fourth API call. This test intentionally isolates quota behavior from
+    # the live public research feed.
     audit = tmp_path / "bankr_token_plans.jsonl"
-    for i in range(3):
-        audit.write_text(
-            (audit.read_text() if audit.exists() else "")
-            + json.dumps({"status": "deployed", "created_at": 1000 + i})
-            + "\n"
-        )
+    audit.write_text("".join(
+        json.dumps({"status": "deployed", "created_at": 1000 + i}) + "\n"
+        for i in range(3)
+    ))
 
     monkeypatch.setattr("time.time", lambda: 1003.0)
     result = civ.cycle()
@@ -43,6 +71,8 @@ def test_live_pipeline_uses_agent_research_for_deployment(monkeypatch, tmp_path)
         data_dir=str(tmp_path),
         bankr_live=True,
     )
+    civ.research.cycle = lambda agents, cycle: [_eligible_opportunity("A001")]
+    civ.research.last_signals = []
     captured = []
 
     class Response:
@@ -52,6 +82,8 @@ def test_live_pipeline_uses_agent_research_for_deployment(monkeypatch, tmp_path)
         def read(self): return b'{"tokenAddress":"0xTOKEN","txHash":"0xTX"}'
 
     def fake_urlopen(request, timeout=0):
+        # Only the deployment request is expected in this isolated pipeline test.
+        assert request.data is not None
         captured.append(json.loads(request.data.decode()))
         return Response()
 
