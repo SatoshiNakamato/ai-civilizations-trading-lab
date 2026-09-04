@@ -58,10 +58,13 @@ class TradingCivilizationV1:
         shared_quota=getattr(self.bankr,"MAX_LAUNCHES_PER_ROLLING_DAY",3)
         quota_used=self.bankr.deployments_today()
         slots=max(0, shared_quota-quota_used)
-        # In live mode, fill only the remaining shared slots with independent
-        # executor research. In simulation mode retain one representative launch
-        # to keep the default test/demo behavior lightweight.
-        candidates=execution[:slots if self.bankr.live else 1]
+        # In live mode, fill remaining shared slots with independent executor
+        # research. If the budget is exhausted, retain one candidate so the
+        # result explicitly records a deferred launch rather than looking idle.
+        if self.bankr.live:
+            candidates=execution[:slots] if slots else execution[:1]
+        else:
+            candidates=execution[:1]
         for o in candidates:
             agent=o.hypothesis.agent
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
