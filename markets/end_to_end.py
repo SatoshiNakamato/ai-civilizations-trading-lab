@@ -56,7 +56,8 @@ class TradingCivilizationV1:
         telemetry.stage("ranking","ok",len(execution),"executor candidates survived ranking")
         existing=self.bankr.recent_symbols(); deployments=[]; bankr_plans=[]; intents=[]
         shared_quota=getattr(self.bankr,"MAX_LAUNCHES_PER_ROLLING_DAY",3)
-        quota_used=self.bankr.deployments_today()
+        quota_counter=getattr(self.bankr,"deployments_today",None)
+        quota_used=quota_counter() if callable(quota_counter) else 0
         slots=max(0, shared_quota-quota_used)
         # In live mode, fill remaining shared slots with independent executor
         # research. If the budget is exhausted, retain one candidate so the
@@ -70,7 +71,7 @@ class TradingCivilizationV1:
             ticker=self.tickers.choose(thesis=o.hypothesis.thesis,agent=agent,cycle=self.cycle_count,existing=existing)
             chain="robinhood" if self.cycle_count % 2 else "base"
             plan=self.bankr.plan(agent,ticker.name,ticker.symbol,o.hypothesis.thesis,o.risk_adjusted,chain,risk=o.hypothesis.risk)
-            quota_used=self.bankr.deployments_today()
+            quota_used=quota_counter() if callable(quota_counter) else 0
             if self.bankr.live and quota_used >= shared_quota:
                 plan.status="deferred"; self.bankr._audit(plan)
                 intent={"agent":agent,"name":ticker.name,"ticker":ticker.symbol,"ticker_score":ticker.score,"chain":chain,"research_score":o.hypothesis.score,"risk_adjusted":o.risk_adjusted,"risk":o.hypothesis.risk,"allowed":False,"reason":f"shared Bankr free-account quota reached: {quota_used}/{shared_quota} in rolling 24h"}
