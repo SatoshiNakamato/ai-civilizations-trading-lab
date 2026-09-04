@@ -35,8 +35,12 @@ class PaperExecutionEngine:
 
     def mark(self, fill_id, buy_price, sell_price):
         fill=self.open_fills[fill_id]; fill.exit_buy=float(buy_price); fill.exit_sell=float(sell_price)
-        # Long cheap venue + short/hedged rich venue. This is a paper model.
-        gross=(fill.exit_sell-fill.entry_sell + fill.entry_buy-fill.exit_buy)*fill.quantity
+        # A convergence trade profits when the quoted spread narrows.
+        # Entry spread = sell venue bid/offer advantage minus cheap leg.
+        # Exit spread is what remains when both hedged legs are unwound.
+        entry_spread=fill.entry_sell-fill.entry_buy
+        exit_spread=fill.exit_sell-fill.exit_buy
+        gross=(entry_spread-exit_spread)*fill.quantity
         fill.realized_pnl=gross-fill.fees*fill.quantity
         return fill
 
