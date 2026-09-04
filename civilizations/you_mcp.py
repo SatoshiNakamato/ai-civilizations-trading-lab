@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -21,18 +22,17 @@ class SearchResult:
 
 
 class YouMCPResearch:
-    """Budget-aware boundary for You.com's keyless MCP search profile.
+    """Real You.com MCP client with a 100-query/day free-tier guard.
 
-    The hosted free profile exposes ``you-search`` and requires an MCP-capable
-    client. This module deliberately does not fake an MCP request with ordinary
-    HTTP. It provides endpoint configuration, caching, and accounting for the
-    real MCP client.
+    The free profile exposes only ``you-search`` and needs no API key. The
+    MCP Python SDK handles the Streamable HTTP protocol; ordinary urllib is
+    intentionally not used here.
     """
 
     def __init__(self, endpoint: str = FREE_MCP_URL, daily_limit: int = 100,
                  cache_path: Path = CACHE_PATH):
         self.endpoint = endpoint
-        self.daily_limit = daily_limit
+        self.daily_limit = max(1, int(daily_limit))
         self.cache_path = cache_path
         self._lock = Lock()
         self._state = self._load()
@@ -57,9 +57,12 @@ class YouMCPResearch:
     def _day_state(self) -> dict:
         return self._state.setdefault("days", {}).setdefault(self._day(), {"queries": 0})
 
+    @staticmethod
+    def _key(query: str) -> str:
+        return " ".join(query.split()).lower()
+
     def cached(self, query: str) -> list[SearchResult] | None:
-        key = " ".join(query.split()).lower()
-        items = self._state.get("results", {}).get(key)
+        items = self._state.get("results", {}).get(self._key(query))
         if not items:
             return None
         return [SearchResult(**item) for item in items]
@@ -68,7 +71,6 @@ class YouMCPResearch:
         return int(self._day_state().get("queries", 0)) < self.daily_limit
 
     def reserve_query(self) -> bool:
-        """Reserve one free-tier search immediately before the real MCP call."""
         with self._lock:
             bucket = self._day_state()
             used = int(bucket.get("queries", 0))
@@ -79,18 +81,85 @@ class YouMCPResearch:
             return True
 
     def store(self, query: str, results: list[SearchResult]) -> None:
-        key = " ".join(query.split()).lower()
         clean: list[dict] = []
         for result in results:
             if result.url and urlparse(result.url).scheme in {"http", "https"}:
                 clean.append({"query": result.query, "title": result.title,
                               "url": result.url, "snippet": result.snippet})
         with self._lock:
-            self._state.setdefault("results", {})[key] = clean
+            self._state.setdefault("results", {})[self._key(query)] = clean
             self._save()
 
+    async def _mcp_search(self, query: str) -> list[SearchResult]:
+        try:
+            from mcp import Client
+            from mcp.types import TextContent
+        except ImportError as exc:
+            raise RuntimeError("MCP SDK is required; install requirements.txt") from exc
+
+        async with Client(self.endpoint) as client:
+            tools = await client.list_tools()
+            names = {tool.name for tool in tools.tools}
+            if "you-search" not in names:
+                raise RuntimeError(f"You.com MCP does not expose you-search: {sorted(names)}")
+            result = await client.call_tool("you-search", {"query": query})
+            if result.is_error:
+                text = "\n".join(block.text for block in result.content
+                                    if isinstance(block, TextContent))
+                raise RuntimeError(text or "You.com you-search returned an MCP error")
+
+            parsed: list[SearchResult] = []
+            structured = result.structured_content
+            if isinstance(structured, dict):
+                candidates = structured.get("results") or structured.get("web") or []
+                if isinstance(candidates, list):
+                    for item in candidates:
+                        if isinstance(item, dict) and item.get("url"):
+                            parsed.append(SearchResult(
+                                query=query,
+                                title=str(item.get("title", "")),
+                                url=str(item["url"]),
+                                snippet=str(item.get("snippet", "")),
+                            ))
+            if parsed:
+                return parsed
+
+            for block in result.content:
+                if isinstance(block, TextContent):
+                    parsed.append(SearchResult(query, "You.com result", "", block.text))
+            return parsed
+
+    def search(self, query: str) -> list[SearchResult]:
+        """Search through the real You.com free MCP profile.
+
+        Cache hits do not consume the daily allowance. Failed MCP calls do
+        consume a reserved slot because the request reached the provider.
+        """
+        query = " ".join(query.split()).strip()
+        if not query:
+            raise ValueError("query must not be empty")
+        cached = self.cached(query)
+        if cached is not None:
+            return cached
+        if not self.reserve_query():
+            raise RuntimeError("You.com free MCP daily search limit reached")
+        results = asyncio.run(self._mcp_search(query))
+        self.store(query, results)
+        return results
+
     def connection_config(self) -> dict:
-        return {"mcpServers": {"you-com": {"url": self.endpoint}}}
+        return {"mcpServers": {"you-com": {"type": "http", "url": self.endpoint}}}
+
+    def health(self) -> dict:
+        """Connect, discover tools, and report whether you-search is available."""
+        async def check() -> dict:
+            from mcp import Client
+            async with Client(self.endpoint) as client:
+                tools = await client.list_tools()
+                names = [tool.name for tool in tools.tools]
+                return {"ok": "you-search" in names, "tools": names,
+                        "endpoint": self.endpoint}
+        return asyncio.run(check())
 
     def snapshot(self) -> dict:
         used = int(self._day_state().get("queries", 0))
