@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from time import time
+import re
 from .core import Civilization
 from .knowledge_graph import KnowledgeGraph
 from .research_coordinator import ResearchCoordinator
@@ -9,21 +10,23 @@ from .contradictions import ContradictionDetector
 from .fallback_search import DuckDuckGoFallback
 from .you_mcp import YouMCPResearch
 from .email_alerts import AlertCandidate, EmailAlertGateway
+from .opportunities import Opportunity, OpportunityEngine
 
 @dataclass
 class ResearchRuntimeStats:
     submitted:int=0; deduplicated:int=0; completed:int=0; failed:int=0
     retried:int=0; fallback_calls:int=0; cache_hits:int=0; provider_calls:int=0
     promoted:int=0; rejected:int=0; contradictions:int=0; alerts_sent:int=0
+    opportunities_discovered:int=0; opportunities_validated:int=0; opportunities_rejected:int=0
 
 class ResearchRuntime:
     """Fault-tolerant, budgeted research layer around the civilization loop."""
-    def __init__(self,civilization: Civilization|None=None,researcher: YouMCPResearch|None=None,fallback: DuckDuckGoFallback|None=None,alerts: EmailAlertGateway|None=None):
+    def __init__(self,civilization: Civilization|None=None,researcher: YouMCPResearch|None=None,fallback: DuckDuckGoFallback|None=None,alerts: EmailAlertGateway|None=None,opportunities: OpportunityEngine|None=None):
         self.civilization=civilization or Civilization(); self.coordinator=ResearchCoordinator()
         self.researcher=researcher or YouMCPResearch(); self.fallback=fallback or DuckDuckGoFallback()
         self.knowledge_graph=KnowledgeGraph(); self.quality=ResearchQuality(); self.contradictions=ContradictionDetector()
-        self.alerts=alerts or EmailAlertGateway()
-        self.stats=ResearchRuntimeStats(); self.failures=[]; self.alert_candidates=[]; self.started_at=time()
+        self.alerts=alerts or EmailAlertGateway(); self.opportunities=opportunities or OpportunityEngine()
+        self.stats=ResearchRuntimeStats(); self.failures=[]; self.alert_candidates=[]; self.opportunity_candidates=[]; self.started_at=time()
 
     def queue_agent_requests(self):
         before_count=len(self.coordinator.tasks)
@@ -47,23 +50,41 @@ class ResearchRuntime:
         if not self.researcher.can_search(): raise RuntimeError('You.com free MCP daily search limit reached')
         try:
             results=self.researcher.search(task.question); self.stats.provider_calls+=1; return results,'you.com'
-        except Exception as first_error:
+        except Exception:
             self.stats.retried+=1
             try:
                 results=self.researcher.search(task.question+' latest'); self.stats.provider_calls+=1; return results,'you.com-retry'
-            except Exception as retry_error:
+            except Exception:
                 results=self.fallback.search(task.question); self.stats.fallback_calls+=1; return results,'duckduckgo-fallback'
+
+    @staticmethod
+    def _estimated_edge(text: str) -> float:
+        """Extract an explicit percentage spread from source text; otherwise 0."""
+        matches = re.findall(r'(?:spread|edge|difference|mispricing)[^%]{0,80}(\d+(?:\.\d+)?)\s*%', text, flags=re.I)
+        return max((float(x) / 100 for x in matches), default=0.0)
 
     def _maybe_alert(self,task,assessment,results):
         if task.topic not in {'arbitrage','market','macro','prediction','risk','alpha','research'}: return
         confidence=float(assessment.get('confidence',0.0)); evidence=int(assessment.get('evidence_count',0))
-        edge=0.0
-        text=' '.join(getattr(r,'snippet','') for r in results).lower()
-        if task.topic == 'arbitrage' and any(x in text for x in ('arbitrage','spread','mispricing','price difference')):
-            edge=0.005
-        candidate=AlertCandidate(title=task.question[:120],category='arbitrage' if task.topic=='arbitrage' else task.topic,summary=f'{evidence} source-backed result(s) found for: {task.question}',confidence=confidence,edge=edge,sources=tuple(getattr(r,'url','') for r in results if getattr(r,'url',''))[:5],agent=task.requester)
+        text=' '.join(getattr(r,'snippet','') for r in results)
+        edge=self._estimated_edge(text)
+        is_arbitrage = task.topic == 'arbitrage' and any(x in text.lower() for x in ('arbitrage','spread','mispricing','price difference'))
+        category='arbitrage' if is_arbitrage else task.topic
+        candidate=AlertCandidate(title=task.question[:120],category=category,summary=f'{evidence} source-backed result(s) found for: {task.question}',confidence=confidence,edge=edge,sources=tuple(getattr(r,'url','') for r in results if getattr(r,'url',''))[:5],agent=task.requester)
         self.alert_candidates.append({**candidate.__dict__,'severity':candidate.severity})
         if self.alerts.send(candidate): self.stats.alerts_sent+=1
+
+        # Create an auditable opportunity only when the research explicitly
+        # describes an arbitrage-like signal. No trade is executed here.
+        if is_arbitrage:
+            opportunity=Opportunity(opportunity_id='',category='arbitrage',asset=task.question[:80],summary=task.question,confidence=confidence,risk=0.50,gross_edge=edge,liquidity=1.0,sources=list(candidate.sources),agents=[task.requester])
+            found=self.opportunities.discover(opportunity)
+            if found is not None:
+                self.stats.opportunities_discovered+=1
+                validated=self.opportunities.validate(found)
+                if validated.status == 'validated': self.stats.opportunities_validated+=1
+                else: self.stats.opportunities_rejected+=1
+                self.opportunity_candidates.append({**validated.__dict__,'net_edge':validated.net_edge,'alert':self.opportunities.should_alert(validated)})
 
     def drain(self,max_tasks=10):
         processed=[]
@@ -85,7 +106,7 @@ class ResearchRuntime:
 
     def cycle(self,max_research_tasks=10):
         queued=self.queue_agent_requests(); drained=self.drain(max_research_tasks); state=self.civilization.step()
-        return {'civilization':state,'research_runtime':{'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'drained':len(drained),'queued_before_cycle':queued,'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'email':self.alerts.snapshot(),'you':self.researcher.snapshot()}}
+        return {'civilization':state,'research_runtime':{'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'drained':len(drained),'queued_before_cycle':queued,'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot()}}
 
     def snapshot(self):
-        return {'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'civilization':self.civilization.snapshot()}
+        return {'coordinator':self.coordinator.snapshot(),'stats':self.stats.__dict__.copy(),'knowledge_graph':self.knowledge_graph.snapshot(),'quality':self.quality.snapshot(),'contradictions':self.contradictions.snapshot(),'failures':self.failures[-20:],'alerts':self.alert_candidates[-20:],'opportunities':self.opportunity_candidates[-20:],'opportunity_engine':self.opportunities.snapshot(),'email':self.alerts.snapshot(),'you':self.researcher.snapshot(),'civilization':self.civilization.snapshot()}
