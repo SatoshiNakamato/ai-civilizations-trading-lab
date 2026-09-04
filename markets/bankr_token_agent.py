@@ -9,6 +9,14 @@ import urllib.request
 import urllib.error
 
 
+AGENT_BANKR_KEYS = {
+    "A001": "BANKR_API_KEY_1",
+    "A002": "BANKR_API_KEY_2",
+    "A003": "BANKR_API_KEY_3",
+    "A004": "BANKR_API_KEY_4",
+}
+
+
 @dataclass
 class TokenPlan:
     agent: str
@@ -26,9 +34,9 @@ class TokenPlan:
 class BankrTokenAgent:
     """Bankr integration with a safe dry-run default.
 
-    Agents can research and score token concepts autonomously. Live deployment is
-    opt-in via BANKR_LIVE_DEPLOY=1 and a user API key; no credentials are stored
-    in the repository. Partner-key deployments are intentionally not attempted.
+    Each execution agent maps to its own local Bankr API-key environment variable.
+    Credentials are never stored in the repository or exposed to research agents.
+    Live deployment remains opt-in via BANKR_LIVE_DEPLOY=1.
     """
 
     ENDPOINT = "https://api.bankr.bot/token-launches/deploy"
@@ -42,6 +50,21 @@ class BankrTokenAgent:
     def normalize_symbol(symbol: str) -> str:
         value = re.sub(r"[^A-Za-z0-9]", "", symbol).upper()
         return value[:10] or "AGENT"
+
+    @staticmethod
+    def credential_env(agent: str) -> str:
+        agent = agent.upper()
+        if agent in AGENT_BANKR_KEYS:
+            return AGENT_BANKR_KEYS[agent]
+        raise ValueError("No Bankr credential is assigned to this agent")
+
+    @classmethod
+    def credential_configured(cls, agent: str) -> bool:
+        return bool(os.getenv(cls.credential_env(agent)))
+
+    @classmethod
+    def configured_agents(cls) -> dict[str, bool]:
+        return {agent: bool(os.getenv(env_name)) for agent, env_name in AGENT_BANKR_KEYS.items()}
 
     def plan(self, agent, name, symbol, thesis, score, chain="base"):
         chain = chain.lower()
@@ -61,9 +84,10 @@ class BankrTokenAgent:
     def deploy(self, plan: TokenPlan):
         if not self.live:
             return self.simulate(plan)
-        key = os.getenv("BANKR_API_KEY")
+        env_name = self.credential_env(plan.agent)
+        key = os.getenv(env_name)
         if not key:
-            raise RuntimeError("BANKR_API_KEY is required for live deployment")
+            raise RuntimeError(f"{env_name} is required for live deployment")
         payload = json.dumps({
             "tokenName": plan.name,
             "tokenSymbol": plan.symbol,
@@ -94,4 +118,5 @@ class BankrTokenAgent:
             handle.write(json.dumps(asdict(plan), sort_keys=True) + "\n")
 
     def snapshot(self):
-        return {"live": self.live, "audit_path": self.audit_path}
+        return {"live": self.live, "audit_path": self.audit_path,
+                "configured_agents": self.configured_agents()}
