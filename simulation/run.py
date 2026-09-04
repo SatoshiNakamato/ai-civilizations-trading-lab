@@ -13,6 +13,7 @@ STOP = False
 def _stop(_signum, _frame):
     global STOP
     STOP = True
+    raise SystemExit(0)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -95,6 +96,8 @@ def main() -> int:
             cycle = civilization.cycle_count
             startup_error = None
             error = None
+        except SystemExit:
+            raise
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
             print(f"CYCLE ERROR cycle={cycle} {error}", flush=True)
