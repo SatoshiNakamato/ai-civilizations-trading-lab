@@ -1,4 +1,3 @@
-import os
 import smtplib
 
 from civilizations.notification_governor import NotificationConfig, NotificationGovernor
@@ -14,7 +13,7 @@ def test_governor_reads_voroa_environment(monkeypatch):
     assert config.min_severity == "CRITICAL"
 
 
-def test_smtp_quota_error_is_governed_and_never_escapes(monkeypatch):
+def test_smtp_quota_error_is_governed_and_never_escapes(monkeypatch, tmp_path):
     for key, value in {
         "AEON_NOTIFICATION_ENABLED": "true",
         "AEON_NOTIFICATION_EMAIL_ENABLED": "true",
@@ -42,19 +41,23 @@ def test_smtp_quota_error_is_governed_and_never_escapes(monkeypatch):
             raise smtplib.SMTPDataError(550, b"5.4.5 Daily user sending limit exceeded")
 
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-    governor = NotificationGovernor(NotificationConfig(cooldown_seconds=300, max_per_cycle=5, max_per_day=20))
+    state = tmp_path / "governor.json"
+    config = NotificationConfig(cooldown_seconds=300, max_per_cycle=5, max_per_day=20)
+    governor = NotificationGovernor(config, state_path=state)
 
     first = governor.notify(severity="CRITICAL", subject="Arbitrage", body="BTC opportunity")
-    second = governor.notify(severity="CRITICAL", subject="Arbitrage", body="BTC opportunity")
+    second = governor.notify(severity="CRITICAL", subject="Arbitrage 2", body="ETH opportunity")
+    restarted = NotificationGovernor(config, state_path=state)
 
     assert first["sent"] is False
-    assert first["reason"] == "smtp_error"
+    assert first["reason"] == "smtp_quota"
     assert second["sent"] is False
     assert second["reason"] == "smtp_circuit_open"
     assert governor.snapshot()["circuit_open"] is True
+    assert restarted.allowed("CRITICAL")[1] == "smtp_circuit_open"
 
 
-def test_successful_notification_is_deduplicated(monkeypatch):
+def test_successful_notification_is_deduplicated(monkeypatch, tmp_path):
     for key, value in {
         "CIVILIZATION_SMTP_HOST": "smtp.example.test",
         "CIVILIZATION_SMTP_PORT": "587",
@@ -80,6 +83,9 @@ def test_successful_notification_is_deduplicated(monkeypatch):
             return None
 
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-    governor = NotificationGovernor(NotificationConfig(cooldown_seconds=0, max_per_cycle=5, max_per_day=20))
+    state = tmp_path / "governor.json"
+    governor = NotificationGovernor(NotificationConfig(cooldown_seconds=0, max_per_cycle=5, max_per_day=20), state_path=state)
     assert governor.notify(severity="CRITICAL", subject="A", body="B")["sent"] is True
     assert governor.notify(severity="CRITICAL", subject="A", body="B")["reason"] == "duplicate"
+    restarted = NotificationGovernor(NotificationConfig(cooldown_seconds=0, max_per_cycle=5, max_per_day=20), state_path=state)
+    assert restarted.snapshot()["day_sent"] == 1
