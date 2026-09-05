@@ -76,6 +76,18 @@ def main() -> int:
     if startup_error:
         print(f"STARTUP DEGRADED {startup_error}", flush=True)
 
+    # Write a heartbeat before the first network/research call. This prevents
+    # a slow public feed or exchange timeout from looking like a dead worker.
+    _write_json(heartbeat_path, {
+        "status": "degraded" if startup_error else "starting",
+        "cycle": cycle,
+        "agents": count,
+        "last_cycle_at": None,
+        "elapsed": 0.0,
+        "error": startup_error,
+        "result": None,
+    })
+
     while not STOP:
         started = time.time()
         cycle += 1
@@ -89,6 +101,15 @@ def main() -> int:
                 civilization.cycle_count = cycle - 1
                 orchestrator = CivilizationOrchestrator({"trading_civilization": civilization})
                 orchestrator.state.cycles = cycle - 1
+            _write_json(heartbeat_path, {
+                "status": "running",
+                "cycle": cycle,
+                "agents": count,
+                "last_cycle_at": time.time(),
+                "elapsed": 0.0,
+                "error": None,
+                "result": None,
+            })
             result = orchestrator.cycle()
             cycle = civilization.cycle_count
             startup_error = None
@@ -98,7 +119,15 @@ def main() -> int:
             print(f"CYCLE ERROR cycle={cycle} {error}", flush=True)
 
         try:
-            _write_json(heartbeat_path, {"status": "degraded" if error else "running", "cycle": cycle, "agents": count, "last_cycle_at": time.time(), "elapsed": time.time() - started, "error": error, "result": result})
+            _write_json(heartbeat_path, {
+                "status": "degraded" if error else "running",
+                "cycle": cycle,
+                "agents": count,
+                "last_cycle_at": time.time(),
+                "elapsed": time.time() - started,
+                "error": error,
+                "result": result,
+            })
             _write_json(state_path, {"cycles": cycle, "updated_at": time.time()})
         except BaseException as exc:
             print(f"STATE ERROR {type(exc).__name__}: {exc}", flush=True)
