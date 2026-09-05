@@ -1,28 +1,29 @@
 # Release Notes
 
-## v0.2.0 — Endurance + Twenty-System Civilization Runtime
+## v0.4.0 — Civilization Runtime Release Candidate
 
 **Date:** 2026-09-05
 
-AEON v0.2.0 is a release-hardening milestone for the autonomous civilization simulation.
+AEON v0.4.0 is a release-candidate milestone that stabilizes the civilization architecture and establishes extension boundaries for future market, research, evolution and execution systems.
 
 ### Highlights
 
-- Twenty explicit civilization systems participate in the life loop: identity, needs, goals, memory, reflection, relationships, culture, organizations, economy, jobs, contracts, research, experiments, discoveries, reputation, innovation, lineage, migration, governance and endurance.
-- Endurance telemetry reports current RSS separately from peak RSS and adapts the active workload under memory pressure.
-- State histories are bounded and persistence is throttled during normal multi-tick operation while still forcing safe checkpoints at run boundaries and pressure events.
-- Real-data market validation is used for research scoring while live execution remains disabled by default.
-- Public-web research is bounded and domain-controlled; generated artifacts remain world-scoped.
-- Regression coverage reaches 91 passing tests in the release validation run.
+- Durable civilization state snapshots provide safe persistence across process restarts.
+- Bounded cross-generation memory lets civilizations retain useful history without unbounded growth.
+- A bounded autonomous scheduler supports repeated civilization cycles.
+- The execution layer explicitly separates paper execution from future live-exchange adapters and keeps live execution guarded by default.
+- Market discovery remains provider-agnostic and supports the full discovered trading-pair universe rather than restricting civilizations to BTC, ETH or USDT-only assets.
+- Audit, lineage, anti-gaming, evidence, scoring, fitness, tournament, selection, evolution and generation components are integrated into the lifecycle.
+- The repository passed 164 automated tests immediately before release metadata preparation.
 
-### Resource behavior
+### Architecture policy
 
-The runtime is intended to remain usable in constrained environments such as mobile/hosted workers. A long run may take materially longer when market-data requests are slow; canceling a run safely stops the current process rather than indicating a corrupted civilization state.
+The core interfaces are treated as stable extension boundaries, not as a feature freeze. Future releases can add new civilizations, forecasting models, markets, providers, risk policies, evolution strategies and exchange adapters without requiring a redesign of the core lifecycle.
 
-### Security posture
+### Execution and security
 
-Creator control-plane commands are intentionally omitted from the public quick-start documentation. Secrets, credentials and private runtime state must never be committed to Git. Live trading remains a separate operational decision behind explicit credentials, risk limits, deployment policy and human controls.
+Live trading is not enabled merely by installing AEON. Real-money execution remains behind explicit credentials, risk limits, deployment policy and human/operator controls. Secrets and private runtime state must never be committed to Git.
 
 ### Distribution
 
-The GitHub repository is the canonical source distribution. Tagged GitHub source archives should be treated as reproducible release snapshots; no private state or credentials are part of the release.
+The GitHub repository is the canonical source distribution. Tagged GitHub source archives represent reproducible release snapshots and contain no private runtime state or credentials.
