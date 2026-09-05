@@ -12,3 +12,8 @@ __pycache__/
 
 # Local backups
 *.backup
+
+# Runtime state
+/data/
+/world_artifacts/
+/world_state/
