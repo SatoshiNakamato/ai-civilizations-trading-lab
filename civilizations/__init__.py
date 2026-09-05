@@ -1,6 +1,10 @@
 """AI civilization package."""
 
-__all__ = ["Agent", "Civilization", "Idea", "CivilizationArena", "ArenaConfig", "ForecastCommitment", "ForecastOutcome", "CivilizationScore"]
+__all__ = [
+    "Agent", "Civilization", "Idea", "CivilizationArena", "ArenaConfig",
+    "ForecastCommitment", "ForecastOutcome", "CivilizationScore",
+    "AgentCommunicationBus", "AgentMessage", "CommunicationConfig",
+]
 
 
 def __getattr__(name):
@@ -10,4 +14,7 @@ def __getattr__(name):
     if name in {"CivilizationArena", "ArenaConfig", "ForecastCommitment", "ForecastOutcome", "CivilizationScore"}:
         from .arena import ArenaConfig, CivilizationArena, CivilizationScore, ForecastCommitment, ForecastOutcome
         return {"CivilizationArena": CivilizationArena, "ArenaConfig": ArenaConfig, "ForecastCommitment": ForecastCommitment, "ForecastOutcome": ForecastOutcome}[name]
+    if name in {"AgentCommunicationBus", "AgentMessage", "CommunicationConfig"}:
+        from .agent_communication import AgentCommunicationBus, AgentMessage, CommunicationConfig
+        return {"AgentCommunicationBus": AgentCommunicationBus, "AgentMessage": AgentMessage, "CommunicationConfig": CommunicationConfig}[name]
     raise AttributeError(name)
