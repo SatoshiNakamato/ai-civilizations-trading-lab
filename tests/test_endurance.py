@@ -24,8 +24,8 @@ def test_critical_pressure_reduces_budget():
     assert result["pressure_events"] == 1
 
 
-def test_twenty_world_systems_are_registered_and_bounded():
-    platform = CivilizationPlatform(root="/tmp/aeon-test-world", seed=7, active_budget=2)
+def test_twenty_world_systems_are_registered_and_bounded(tmp_path):
+    platform = CivilizationPlatform(root=str(tmp_path / "aeon-test-world"), seed=7, active_budget=2)
     for aid in ("A001", "A002"):
         platform.register(aid)
     systems = WorldDynamics(platform, seed=7, history_limit=32)
@@ -38,8 +38,8 @@ def test_twenty_world_systems_are_registered_and_bounded():
     assert len(platform.artifacts) <= 300
 
 
-def test_dynamics_updates_contracts_markets_and_migration():
-    platform = CivilizationPlatform(root="/tmp/aeon-test-world-2", seed=11, active_budget=2)
+def test_dynamics_updates_contracts_markets_and_migration(tmp_path):
+    platform = CivilizationPlatform(root=str(tmp_path / "aeon-test-world-2"), seed=11, active_budget=2)
     platform.register("A001")
     platform.register("A002")
     systems = WorldDynamics(platform, seed=11)
