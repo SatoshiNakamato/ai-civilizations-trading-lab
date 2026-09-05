@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from .communication import CommunicationNetwork
 from .evolution import crossover, mutate, rank_ideas, CivilizationEvolution
+from .emergence import EmergenceEngine
 from .learning import Intelligence
 from .research import PublicWebCollector, ResearchDesk
 from .research_bridge import ResearchBridge
@@ -65,10 +66,11 @@ class Civilization:
     def __init__(self, size: int = 100, seed: int = 42):
         self.rng = Random(seed); self.tick = 0; self.generation = 0
         self.agents: Dict[str, Agent] = {}; self.global_ideas: List[Idea] = []; self.events: List[str] = []
-        self.network = CommunicationNetwork(); self.society = Society(); self.research = ResearchDesk(web_collector=PublicWebCollector())
+        self.network = CommunicationNetwork(); self.society = Society(); self.emergence = EmergenceEngine(seed)
+        self.research = ResearchDesk(web_collector=PublicWebCollector())
         self.research_bridge = ResearchBridge(self.research, self.research.web_collector); self.bureau = ResearchBureau(self.research.web_collector)
         self.evolution = CivilizationEvolution(); self.verifier = AlphaVerifier(); self._validation_cache: dict[tuple[str,str], object] = {}
-        self._seed_research(); self._create_population(size)
+        self._seed_research(); self._create_population(size); self.emergence.seed_population(self.agents.values())
         for agent in self.agents.values(): self.evolution.specialize(agent.agent_id, self._evolution_role(agent.archetype))
 
     def _evolution_role(self, archetype: str) -> str:
@@ -98,7 +100,7 @@ class Civilization:
             self.evolution.record_prediction(agent.agent_id, symbol, idea.thesis, validation.score, min(1.0, 0.2 + agent.curiosity * 0.8), validation.samples, interval)
             self.society.record_knowledge(f"{agent.archetype}:{idea.title}", idea.thesis, agent.agent_id, idea.fitness, self.generation)
             self.evolution.publish(agent.agent_id, agent.archetype, idea.thesis, [s.get("url", "") for s in context.get("sources", [])]); proposals.append(idea)
-        # Resolve previous unresolved strategy predictions against a fresh real verification snapshot.
+            self.emergence.observe(agent, idea, self._sample_peers(agent.agent_id, 3), self.tick)
         resolved = self.evolution.resolve_real_validation(self._validation_cache, min_samples=200, tolerance=0.02)
         champions = rank_ideas(proposals)[:20]
         for idea in champions:
@@ -112,8 +114,9 @@ class Civilization:
                 idx = self._knowledge_index(idea.thesis)
                 if idx is not None: self.evolution.challenge(idx, kind == "endorse")
                 self.network.update_reputation(sender.agent_id, 0.01 if idea.validation_passed else -0.005)
-        self.generation += 1; self.bureau.generation = self.generation; evolution_state = self.evolution.evolve(self.agents.values())
-        self.events.append(f"tick={self.tick}: real validation complete; resolved={resolved}; synthetic fitness disabled; generation evolved"); self.events = self.events[-100:]
+        self.emergence.advance(self.agents.values(), self.tick)
+        self.generation += 1; self.bureau.generation = self.generation; self.evolution.evolve(self.agents.values())
+        self.events.append(f"tick={self.tick}: emergence cycle complete; resolved={resolved}; organizations={len(self.emergence.organizations)}; memes={len(self.emergence.memes)}"); self.events = self.events[-100:]
         return self.snapshot()
     def _knowledge_index(self, thesis: str):
         for i in range(len(self.evolution.knowledge)-1,-1,-1):
@@ -123,12 +126,12 @@ class Civilization:
         pool=[a for aid,a in self.agents.items() if aid != origin]; self.rng.shuffle(pool); return pool[:count]
     def snapshot(self) -> dict:
         top=sorted(self.global_ideas,key=lambda x:(x.validation_passed,x.fitness),reverse=True)[:10]; best_agents=sorted(self.agents.values(),key=lambda a:a.intelligence.capability_score,reverse=True)[:10]
-        return {"tick":self.tick,"generation":self.generation,"agents":len(self.agents),"ideas":len(self.global_ideas),"messages":len(self.network.memory.messages),"research":self.research.snapshot(),"bureau":self.bureau.snapshot(),"society":self.society.snapshot(),"evolution":self.evolution.snapshot(),"best_agents":[{"id":a.agent_id,"archetype":a.archetype,"capability":round(a.intelligence.capability_score,3),"experience":a.intelligence.experience,"discoveries":a.intelligence.discoveries} for a in best_agents],"top_ideas":[{"title":i.title,"origin":i.origin,"fitness":round(i.fitness,4),"real_score":round(i.validation_score,6),"return":round(i.validation_return,6),"drawdown":round(i.validation_drawdown,6),"samples":i.validation_samples,"passed":i.validation_passed} for i in top],"events":self.events[-20:]}
+        return {"tick":self.tick,"generation":self.generation,"agents":len(self.agents),"ideas":len(self.global_ideas),"messages":len(self.network.memory.messages),"research":self.research.snapshot(),"bureau":self.bureau.snapshot(),"society":self.society.snapshot(),"emergence":self.emergence.snapshot(),"evolution":self.evolution.snapshot(),"best_agents":[{"id":a.agent_id,"archetype":a.archetype,"capability":round(a.intelligence.capability_score,3),"experience":a.intelligence.experience,"discoveries":a.intelligence.discoveries} for a in best_agents],"top_ideas":[{"title":i.title,"origin":i.origin,"fitness":round(i.fitness,4),"real_score":round(i.validation_score,6),"return":round(i.validation_return,6),"drawdown":round(i.validation_drawdown,6),"samples":i.validation_samples,"passed":i.validation_passed} for i in top],"events":self.events[-20:]}
 
 if __name__ == "__main__":
     civilization=Civilization(100,42); print("AI CIVILIZATION ONLINE"); print("======================"); print(f"Population: {len(civilization.agents)}")
     for _ in range(10):
-        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Research findings: {state['bureau']['findings']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Conversations: {state['society']['conversation_count']}"); print(f"Persistent predictions: {state['evolution']['predictions']}"); print(f"Resolved predictions: {state['evolution']['resolved_predictions']}"); print(f"Leaderboard entries: {len(state['evolution']['leaderboard'])}")
+        state=civilization.step(); print(f"\nGeneration {state['generation']}"); print(f"Ideas discovered: {state['ideas']}"); print(f"Messages: {state['messages']}"); print(f"Research documents: {state['research']['documents']}"); print(f"Research findings: {state['bureau']['findings']}"); print(f"Shared knowledge: {state['society']['knowledge_count']}"); print(f"Organizations: {state['emergence']['organizations']}"); print(f"Strategy memes: {state['emergence']['memes']}"); print(f"Persistent predictions: {state['evolution']['predictions']}"); print(f"Resolved predictions: {state['evolution']['resolved_predictions']}"); print(f"Leaderboard entries: {len(state['evolution']['leaderboard'])}")
         if state['best_agents']: a=state['best_agents'][0]; print("Top capability:",a['id'],a['capability'],"experience:",a['experience'])
         if state['top_ideas']:
             i=state['top_ideas'][0]; print("Best idea:",i['title'],"| real score:",i['real_score'],"| return:",i['return'],"| passed:",i['passed'])

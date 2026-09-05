@@ -1,38 +1,57 @@
-# AI Civilizations Trading Lab
+# AEON — Artificial Evolutionary Organizational Network
 
-A research-first multi-agent market intelligence system: 100 simulated AI civilizations with distinct personas, expertise, risk preferences, communication, strategy evolution, arbitrage research, prediction-market analysis, and cooperative portfolio intelligence.
+A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
-## Vision
+> **Don't build agents. Build the world where they evolve.**
 
-The civilization behaves like a society of specialized researchers. Agents observe markets, form hypotheses, debate, share strategy memes, mutate and recombine ideas, run experiments, and learn from measured outcomes. The shared objective is to improve risk-adjusted performance while preserving capital.
+## What is new
 
-This project starts in simulation and paper trading. Live execution is deliberately separated behind risk controls and explicit configuration.
+AEON extends the original trading laboratory with an emergent social/economic layer. Agents do not merely generate trading ideas: they form organizations, exchange bounded strategy memes, mutate hypotheses, accumulate social capital and compete for evidence-backed influence.
 
-## Research budget
+The core loop is:
 
-The keyless You.com MCP free profile provides `you-search` with a 100-query daily limit. The runtime now enforces a persistent 50/50 allocation: up to 50 searches are reserved for the dedicated `arb` research lane and up to 50 for all other agents. Cache hits do not consume the provider budget, and retries reserve their own search slot.
+**Observe → Research → Hypothesize → Validate → Debate → Share → Adopt → Mutate → Organize → Evolve**
 
-## Financial results
+The important distinction is that the civilization is not scripted to choose a winning strategy. The simulation supplies rules, resources and feedback; strategies and organizations emerge from repeated interaction.
 
-Paper opportunities are now connected to a financial-results layer that reports net P&L, return on notional, win rate, drawdown, Sharpe-like statistics, and attribution by agent and opportunity category. These are measured paper results from modeled fills, not guaranteed live returns.
+## Civilization primitives
 
-## Termux / Web
+- **100 agents** across quant, arbitrage, macro, momentum, value, contrarian, risk, probability, microstructure and exploration roles.
+- **Strategy memes** — bounded information objects that can be adopted, challenged and mutated inside the simulation.
+- **Organizations** — agents can form mission-driven guilds with members, treasury and influence.
+- **Social capital** — cooperation becomes a measurable resource.
+- **Discovery and innovation** — evidence-backed discoveries and mutations become civilization-level state.
+- **Evidence loop** — market hypotheses remain subject to real-data validation and out-of-sample checks.
+- **Trading intelligence** — the existing arbitrage, research, prediction-market and risk modules remain available as civilization capabilities.
+- **Alert-only live boundary** — live execution remains disabled by default and is not required to run the civilization.
 
-Designed to run on ordinary Python in Termux. A lightweight local web dashboard will expose the civilization state, agent activity, discovered opportunities, strategy leaderboard, and simulation controls.
+## Run locally
+
+```bash
+python -m pip install -r requirements.txt
+python -m uvicorn web.app:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000` in a browser. Press **Advance civilization** or **Run 5 generations** and watch organizations, strategy memes and events emerge.
+
+For a CLI run:
+
+```bash
+python -m civilizations.core
+```
 
 ## Architecture
 
-- `civilizations/` — agents, personas, communication, memory, evolution, council
-- `strategies/` — strategy genomes, mutation, crossover, evaluation
-- `markets/` — normalized market data, arbitrage and prediction-market research interfaces
-- `simulation/` — living civilization event loop
-- `backtesting/` — deterministic strategy evaluation
-- `risk/` — position sizing, exposure and safety gates
-- `web/` — local dashboard/API
-- `tests/` — automated tests
+- `civilizations/` — agents, cognition, research, society, evolution and emergence
+- `markets/` — normalized market data, arbitrage, prediction-market research and paper infrastructure
+- `simulation/` — continuous civilization workers
+- `backtesting/` — deterministic validation
+- `risk/` — exposure and safety gates
+- `web/` — local AEON console/API
+- `tests/` — automated regression suite
 
 ## Safety
 
-The "mind virus" concept is implemented as bounded strategy/idea propagation: information can spread and mutate inside the simulation, but agents do not self-replicate software, deploy themselves, or bypass operator controls.
+The earlier “mind virus” idea is implemented only as bounded strategy/idea propagation. Strategy memes are data structures inside the simulation: agents do not self-replicate software, deploy themselves, bypass permissions or execute autonomous code.
 
-No strategy is guaranteed profitable. Performance must be demonstrated through out-of-sample testing and paper trading before any consideration of live execution.
+Live trading is not implied by simulated performance. Any future execution integration must remain behind explicit credentials, risk limits, human controls and independent validation.
