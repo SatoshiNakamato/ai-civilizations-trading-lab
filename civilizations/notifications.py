@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import smtplib
 import time
 from dataclasses import dataclass
@@ -88,9 +89,12 @@ class SMTPEmailSender:
         self.host = host if host is not None else os.getenv("CIVILIZATION_SMTP_HOST", "").strip()
         self.port = port if port is not None else _int("CIVILIZATION_SMTP_PORT", 587, 1)
         self.user = user if user is not None else os.getenv("CIVILIZATION_SMTP_USER", "").strip()
-        self.password = password if password is not None else os.getenv("CIVILIZATION_SMTP_PASSWORD", "")
-        # Use the authenticated Gmail account as the From address. This avoids
-        # relying on a separate alias/domain sender that may not be authorized.
+        # Google displays app passwords grouped with spaces. SMTP AUTH expects
+        # the actual 16-character secret, so tolerate either representation.
+        raw_password = password if password is not None else os.getenv("CIVILIZATION_SMTP_PASSWORD", "")
+        self.password = re.sub(r"\s+", "", raw_password)
+        # Always default From to the authenticated account. A separate alias is
+        # only used when explicitly supplied to this class by code/tests.
         self.sender = sender if sender is not None else self.user
         self.recipient = recipient if recipient is not None else os.getenv("CIVILIZATION_ALERT_EMAIL", "").strip()
 
