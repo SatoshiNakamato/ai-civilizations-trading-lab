@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import smtplib
 import time
 from dataclasses import dataclass
 from email.message import EmailMessage
+from pathlib import Path
 from threading import Lock
 from typing import Callable
+
+
+DEFAULT_STATE_PATH = Path(os.getenv("AEON_NOTIFICATION_STATE_PATH", "world_state/notification_governor.json"))
 
 
 @dataclass(frozen=True)
@@ -58,18 +63,26 @@ class NotificationConfig:
 
 
 class NotificationGovernor:
-    """Fail-closed notification boundary with quota/cooldown protection.
+    """Fail-closed notification boundary with durable quota/cooldown protection.
 
-    SMTP failures never escape into the civilization cycle. In particular, a
-    provider quota response such as Gmail 550/5.4.5 opens a temporary circuit
-    and suppresses further sends instead of retrying every cycle.
+    SMTP failures never escape into the civilization cycle. Provider quota
+    responses such as Gmail 550/5.4.5 are persisted as a circuit-open state
+    until the next local calendar day, preventing process restarts from creating
+    a hot retry loop.
     """
 
     _LEVELS = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
-    def __init__(self, config: NotificationConfig | None = None, *, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        config: NotificationConfig | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+        state_path: Path | None = None,
+    ):
         self.config = config or NotificationConfig.from_env()
         self.clock = clock
+        self.state_path = state_path or DEFAULT_STATE_PATH
         self._lock = Lock()
         self._cycle_sent = 0
         self._day = self._today()
@@ -78,18 +91,60 @@ class NotificationGovernor:
         self._seen: dict[str, float] = {}
         self._circuit_until = 0.0
         self._last_error: str | None = None
+        self._load_state()
+        self._roll_day_if_needed()
 
     def _today(self) -> str:
         return time.strftime("%Y-%m-%d", time.localtime(self.clock()))
 
+    def _load_state(self) -> None:
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("day") == self._day:
+            self._day_sent = max(0, int(data.get("day_sent", 0)))
+            self._last_sent_at = max(0.0, float(data.get("last_sent_at", 0.0)))
+            self._seen = {
+                str(k): float(v)
+                for k, v in dict(data.get("seen", {})).items()
+                if isinstance(v, (int, float))
+            }
+        self._circuit_until = max(0.0, float(data.get("circuit_until", 0.0)))
+        self._last_error = data.get("last_error") if isinstance(data.get("last_error"), str) else None
+
+    def _save_state(self) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "day": self._day,
+            "day_sent": self._day_sent,
+            "last_sent_at": self._last_sent_at,
+            "seen": self._seen,
+            "circuit_until": self._circuit_until,
+            "last_error": self._last_error,
+        }
+        tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(self.state_path)
+
+    def _roll_day_if_needed(self) -> None:
+        today = self._today()
+        if today == self._day:
+            return
+        self._day = today
+        self._day_sent = 0
+        self._last_sent_at = 0.0
+        self._seen.clear()
+        self._circuit_until = 0.0
+        self._last_error = None
+        self._save_state()
+
     def begin_cycle(self) -> None:
         with self._lock:
             self._cycle_sent = 0
-            today = self._today()
-            if today != self._day:
-                self._day = today
-                self._day_sent = 0
-                self._seen.clear()
+            self._roll_day_if_needed()
 
     @staticmethod
     def fingerprint(subject: str, body: str) -> str:
@@ -109,6 +164,25 @@ class NotificationGovernor:
             return None
         return sender, recipient, host, port
 
+    @staticmethod
+    def _is_daily_quota_error(exc: smtplib.SMTPDataError) -> bool:
+        detail = exc.smtp_error
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        text = str(detail).lower()
+        return exc.smtp_code in {421, 450, 451, 452, 550, 552, 554} and (
+            "5.4.5" in text
+            or "daily user sending limit" in text
+            or "sending limit" in text
+            or "quota" in text
+        )
+
+    def _next_day_timestamp(self) -> float:
+        now = self.clock()
+        local = time.localtime(now)
+        tomorrow = time.mktime((local.tm_year, local.tm_mon, local.tm_mday + 1, 0, 0, 0, 0, 0, -1))
+        return max(now + 300.0, tomorrow + 1.0)
+
     def allowed(self, severity: str, *, fingerprint: str | None = None) -> tuple[bool, str]:
         severity = severity.strip().upper()
         if not self.config.enabled or not self.config.email_enabled:
@@ -117,6 +191,7 @@ class NotificationGovernor:
             return False, "below_min_severity"
         now = self.clock()
         with self._lock:
+            self._roll_day_if_needed()
             if now < self._circuit_until:
                 return False, "smtp_circuit_open"
             if self._cycle_sent >= self.config.max_per_cycle:
@@ -153,16 +228,23 @@ class NotificationGovernor:
                 smtp.starttls()
                 smtp.login(os.getenv("CIVILIZATION_SMTP_USER"), os.getenv("CIVILIZATION_SMTP_PASSWORD"))
                 smtp.send_message(message)
+        except smtplib.SMTPDataError as exc:
+            with self._lock:
+                self._last_error = type(exc).__name__
+                self._circuit_until = self._next_day_timestamp() if self._is_daily_quota_error(exc) else self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._save_state()
+            return {"sent": False, "reason": "smtp_quota" if self._is_daily_quota_error(exc) else "smtp_error", "error": type(exc).__name__, "severity": severity.upper()}
         except smtplib.SMTPException as exc:
             with self._lock:
                 self._last_error = type(exc).__name__
-                # SMTP 4xx/5xx failures must not become a hot retry loop.
                 self._circuit_until = self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._save_state()
             return {"sent": False, "reason": "smtp_error", "error": type(exc).__name__, "severity": severity.upper()}
         except OSError as exc:
             with self._lock:
                 self._last_error = type(exc).__name__
                 self._circuit_until = self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._save_state()
             return {"sent": False, "reason": "smtp_transport_error", "error": type(exc).__name__, "severity": severity.upper()}
 
         with self._lock:
@@ -171,6 +253,7 @@ class NotificationGovernor:
             self._last_sent_at = self.clock()
             self._seen[fingerprint] = self._last_sent_at
             self._last_error = None
+            self._save_state()
         return {"sent": True, "reason": "sent", "severity": severity.upper()}
 
     def snapshot(self) -> dict:
