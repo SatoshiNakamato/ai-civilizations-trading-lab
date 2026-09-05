@@ -20,14 +20,14 @@ def _bool(name: str, default: bool) -> bool:
 def _int(name: str, default: int, minimum: int = 0) -> int:
     try:
         return max(minimum, int(os.getenv(name, str(default))))
-    except ValueError:
+    except (TypeError, ValueError):
         return default
 
 
 def _float(name: str, default: float) -> float:
     try:
         return max(0.0, float(os.getenv(name, str(default))))
-    except ValueError:
+    except (TypeError, ValueError):
         return default
 
 
@@ -79,9 +79,10 @@ class NotificationResult:
 
 
 class SMTPEmailSender:
-    """SMTP adapter using the CIVILIZATION_* environment variables."""
+    """SMTP adapter using CIVILIZATION_* environment variables."""
 
-    def __init__(self, *, host: str | None = None, port: int | None = None, user: str | None = None, password: str | None = None, sender: str | None = None, recipient: str | None = None):
+    def __init__(self, *, host: str | None = None, port: int | None = None, user: str | None = None,
+                 password: str | None = None, sender: str | None = None, recipient: str | None = None):
         self.host = host if host is not None else os.getenv("CIVILIZATION_SMTP_HOST", "").strip()
         self.port = port if port is not None else _int("CIVILIZATION_SMTP_PORT", 587, 1)
         self.user = user if user is not None else os.getenv("CIVILIZATION_SMTP_USER", "").strip()
@@ -102,20 +103,21 @@ class SMTPEmailSender:
                 if self.user:
                     smtp.login(self.user, self.password)
                 smtp.send_message(message)
-        else:
-            with smtplib.SMTP(self.host, self.port, timeout=20) as smtp:
-                smtp.ehlo()
-                smtp.starttls()
-                smtp.ehlo()
-                if self.user:
-                    smtp.login(self.user, self.password)
-                smtp.send_message(message)
+            return
+        with smtplib.SMTP(self.host, self.port, timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            if self.user:
+                smtp.login(self.user, self.password)
+            smtp.send_message(message)
 
 
 class NotificationGovernor:
     """Gate alerts so a 30-second worker cannot become an email storm."""
 
-    def __init__(self, sender: Callable[[Notification], None], config: NotificationGovernorConfig | None = None, *, clock: Callable[[], float] = time.time):
+    def __init__(self, sender: Callable[[Notification], None], config: NotificationGovernorConfig | None = None,
+                 *, clock: Callable[[], float] = time.time):
         self.sender = sender
         self.config = config or NotificationGovernorConfig.from_env()
         self.clock = clock
@@ -131,13 +133,13 @@ class NotificationGovernor:
         return time.strftime("%Y-%m-%d", time.localtime(self.clock()))
 
     def begin_cycle(self) -> None:
-        """Reset only the per-cycle allowance; call once at cycle start."""
         self._sent_times.clear()
         today = self._today()
         if today != self._day:
             self._day = today
             self._day_count = 0
             self._last_seen.clear()
+            self._last_sent = 0.0
 
     @staticmethod
     def fingerprint(severity: str, subject: str, body: str) -> str:
@@ -159,9 +161,10 @@ class NotificationGovernor:
             self._day = today
             self._day_count = 0
             self._last_seen.clear()
+            self._last_sent = 0.0
         self._sent_times = [t for t in self._sent_times if now - t < self.config.window_seconds]
         if len(self._sent_times) >= self.config.max_notifications:
-            return NotificationResult(False, "rate_limited_cycle", fp)
+            return NotificationResult(False, "rate_limited", fp)
         if self._day_count >= self.config.max_per_day:
             return NotificationResult(False, "rate_limited_day", fp)
         if self.config.cooldown_seconds and self._last_sent and now - self._last_sent < self.config.cooldown_seconds:
@@ -173,7 +176,8 @@ class NotificationGovernor:
         try:
             self.sender(notification)
         except Exception as exc:
-            # SMTP 550/5.4.5 and other provider failures never escape into the worker.
+            # Provider failures, including Gmail 550/5.4.5 quota responses,
+            # are isolated from the civilization worker.
             self._last_seen[fp] = now
             return NotificationResult(False, f"delivery_degraded:{type(exc).__name__}", fp)
         self._sent_times.append(now)
