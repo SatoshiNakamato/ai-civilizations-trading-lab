@@ -79,8 +79,12 @@ def main() -> int:
     if startup_error:
         print(f"STARTUP DEGRADED {startup_error}", flush=True)
 
+    # A healthy worker is immediately observable as running.  The previous
+    # "starting" state created a race in smoke tests and made external health
+    # checks see a transient state even though the worker was already entering
+    # its first cycle.
     _write_json(heartbeat_path, {
-        "status": "degraded" if startup_error else "starting",
+        "status": "degraded" if startup_error else "running",
         "cycle": cycle,
         "agents": count,
         "last_cycle_at": None,
