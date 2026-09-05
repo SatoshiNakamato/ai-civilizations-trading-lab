@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse, json, shlex
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from .aeon_runtime import AEONRuntime
 from .autonomous_world import AutonomousWorld
 from .charter import CreatorCharter
@@ -16,7 +17,7 @@ class CreatorCommand:
 
 @dataclass
 class CommandCenter:
-    """Termux-friendly Creator interface for the persistent AEON world."""
+    """Interactive Creator console. Run `python -m civilizations.command_center`."""
     runtime: AEONRuntime | None = None
     inbox: Inbox | None = None
     treasury: Treasury | None = None
@@ -25,48 +26,52 @@ class CommandCenter:
     paused: bool = False
     shutdown: bool = False
     history: list[CreatorCommand] = field(default_factory=list)
+    state_file: str = 'world_state/creator_commands.jsonl'
 
     def __post_init__(self):
-        if self.runtime is None: self.runtime=AEONRuntime()
-        self.world_loop=AutonomousWorld(self.runtime)
+        if self.runtime is None:
+            self.runtime = AEONRuntime()
+        self.world_loop = AutonomousWorld(self.runtime)
+        Path(self.state_file).parent.mkdir(parents=True, exist_ok=True)
 
-    def issue(self,text):
+    def _record(self, text):
+        cmd=CreatorCommand(text, datetime.now(timezone.utc).isoformat())
+        self.history.append(cmd)
+        with open(self.state_file,'a',encoding='utf-8') as f:
+            f.write(json.dumps(cmd.__dict__)+'\n')
+
+    def issue(self, text):
         text=text.strip()
         if not text: return {'ok':False,'error':'empty command'}
-        self.history.append(CreatorCommand(text,datetime.now(timezone.utc).isoformat()))
-        cmd=text.lower()
+        self._record(text)
+        parts=shlex.split(text); cmd=parts[0].lower() if parts else ''
         if cmd in {'status','observe','look'}: return {'ok':True,'status':self.status()}
         if cmd=='charter': return {'ok':True,'charter':self.charter.prompt(),'fingerprint':self.charter.fingerprint}
         if cmd in {'pause','freeze'}: self.paused=True; return {'ok':True,'message':'Civilization paused.'}
         if cmd in {'resume','continue'}:
             if self.shutdown: return {'ok':False,'error':'world is shut down; start a new runtime to restart'}
             self.paused=False; return {'ok':True,'message':'Civilization resumed.'}
-        if cmd in {'shutdown','kill','emergency shutdown'}:
-            self.shutdown=True; self.paused=True; return {'ok':True,'message':'EMERGENCY SHUTDOWN: autonomous loop frozen; host files untouched.'}
-        if cmd.startswith('speak '):
-            msg=text[6:].strip(); self.runtime.civilization.events.append(f'CREATOR: {msg}')
-            self.runtime.civilization.events=self.runtime.civilization.events[-200:]
-            return {'ok':True,'message':'Creator message entered into the civilization event stream.','text':msg}
-        if cmd.startswith('tell '):
-            parts=shlex.split(text)
-            if len(parts)<3: return {'ok':False,'error':'usage: tell <agent_id> <message>'}
+        if cmd in {'shutdown','kill'}:
+            self.shutdown=True; self.paused=True; return {'ok':True,'message':'EMERGENCY SHUTDOWN: autonomous loop frozen.'}
+        if cmd=='speak':
+            msg=text[len(parts[0]):].strip(); self.runtime.civilization.events.append(f'CREATOR: {msg}')
+            return {'ok':True,'message':'Creator message entered into civilization.','text':msg}
+        if cmd=='tell' and len(parts)>=3:
             aid=parts[1]; msg=' '.join(parts[2:]); self.runtime.civilization.events.append(f'CREATOR -> {aid}: {msg}')
-            return {'ok':True,'recipient':aid,'text':msg,'tick':self.runtime.civilization.tick}
-        if cmd.startswith('run '):
+            return {'ok':True,'recipient':aid,'text':msg}
+        if cmd=='run' and len(parts)>=2:
             if self.paused or self.shutdown: return {'ok':False,'error':'civilization is paused'}
-            try: steps=max(1,min(1000,int(shlex.split(text)[1])))
-            except (IndexError,ValueError): return {'ok':False,'error':'usage: run <1-1000>'}
+            try: steps=max(1,min(1000,int(parts[1])))
+            except ValueError: return {'ok':False,'error':'usage: run <1-1000>'}
             return {'ok':True,'state':self.world_loop.run(steps)}
-        if cmd.startswith('inspect '):
-            parts=shlex.split(text)
-            if len(parts)!=2: return {'ok':False,'error':'usage: inspect <agent_id>'}
+        if cmd=='inspect' and len(parts)==2:
             return {'ok':True,'agent':parts[1],'life':self.runtime.life.inspect(parts[1])}
-        if cmd.startswith('browse '):
-            parts=shlex.split(text)
-            if len(parts)!=3: return {'ok':False,'error':'usage: browse <agent_id> <https_url>'}
-            try: result=self.runtime.world.browse(parts[1],parts[2]); result['content']=result['content'][:12000]; return {'ok':True,'observation':result}
+        if cmd=='browse' and len(parts)==3:
+            try:
+                result=self.runtime.world.browse(parts[1],parts[2]); result['content']=result['content'][:12000]
+                return {'ok':True,'observation':result}
             except Exception as exc: return {'ok':False,'error':str(exc)}
-        return {'ok':False,'error':'try: status | charter | speak <message> | tell <agent> <message> | run <n> | inspect <agent> | browse <agent> <https_url> | pause | resume | shutdown'}
+        return {'ok':False,'error':'commands: status | charter | speak <message> | tell <agent> <message> | run <n> | inspect <agent> | browse <agent> <https_url> | pause | resume | shutdown | exit'}
 
     def status(self):
         state=self.runtime.civilization.snapshot()
@@ -76,9 +81,13 @@ class CommandCenter:
 
 def main():
     parser=argparse.ArgumentParser(description='AEON Creator Command Center')
-    parser.add_argument('--once',help='execute one command and exit'); args=parser.parse_args()
-    center=CommandCenter(); print('AEON COMMAND CENTER ONLINE'); print('Type: status | charter | speak <message> | tell <agent> <message> | run <n> | inspect <agent> | browse <agent> <https_url> | pause | resume | shutdown | exit')
-    if args.once: print(json.dumps(center.issue(args.once),indent=2,default=str)); return
+    parser.add_argument('--once',help='execute one command and exit')
+    args=parser.parse_args(); center=CommandCenter()
+    print('AEON COMMAND CENTER ONLINE')
+    print('IMPORTANT: type commands at the CREATOR> prompt, not at the Termux $ prompt.')
+    print('Try: status  |  run 1  |  inspect A017  |  speak hello  |  shutdown')
+    if args.once:
+        print(json.dumps(center.issue(args.once),indent=2,default=str)); return
     while not center.shutdown:
         try: line=input('CREATOR> ')
         except (EOFError,KeyboardInterrupt): print('\nCommand center closed.'); break
