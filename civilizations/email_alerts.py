@@ -58,8 +58,11 @@ class EmailAlertGateway:
         self.sent = 0
         self.suppressed = 0
         if governor is None:
+            # NotificationGovernor requires an explicit delivery adapter.
+            # Keep the gateway's configured recipient attached to that adapter
+            # instead of constructing a sender-less governor at worker startup.
             sender = SMTPEmailSender(recipient=self.recipient)
-            governor = NotificationGovernor()
+            governor = NotificationGovernor(sender=sender)
         self.governor = governor
 
     def enabled(self) -> bool:
@@ -121,7 +124,7 @@ class EmailAlertGateway:
             return False
         subject, body = self._message(candidate)
         result = self.governor.notify(severity=candidate.severity, subject=subject, body=body)
-        if result.get("sent"):
+        if result.sent:
             key = f"{candidate.category}:{candidate.title.strip().lower()}"
             self.last_sent[key] = time()
             self.sent += 1
