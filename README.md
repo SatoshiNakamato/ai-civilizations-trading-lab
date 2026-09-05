@@ -1,6 +1,6 @@
 # AEON — Artificial Evolutionary Organizational Network
 
-**Release: v0.5.0**
+**Release: v0.4.0**
 
 A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
@@ -11,18 +11,21 @@ A research-first simulation where 100 specialized AI market intelligences become
 
 **Project enquiries:** iNeed2p@wearehackerone.com
 
-## What is new in v0.5.0
+## Unreleased — next release candidate
 
-AEON now adds a production-oriented **Notification Governor** and a hermetic CI boundary.
+The current `main` branch contains the next notification-governance and CI work. **It is not released or tagged yet.** A release tag will only be created after explicit release confirmation.
+
+Planned release work includes:
 
 - **Notification Governor** — critical/high/info alerts are fingerprinted, deduplicated and rate-limited before delivery.
-- **Provider isolation** — notification delivery is injected behind a small interface, so SMTP/provider failures cannot crash the civilization worker.
-- **Graceful degradation** — provider throttling such as SMTP `550 5.4.5` is recorded as degraded notification delivery rather than repeatedly retrying in the hot loop.
+- **Durable notification state** — send counts, dedupe fingerprints and SMTP circuit state survive worker restarts.
+- **SMTP quota protection** — provider throttling such as Gmail `550 5.4.5` opens a persistent circuit until the next local day instead of producing repeated hot-loop failures.
+- **Provider isolation** — notification delivery remains behind a small boundary so SMTP/provider failures cannot crash the civilization worker.
 - **Deterministic fingerprints** — identical alert content produces the same stable fingerprint across runs.
-- **Hermetic CI** — tests no longer depend on Binance public API availability. Market-dependent tests use deterministic fixtures.
+- **Hermetic CI** — tests do not depend on Binance public API availability; market-dependent tests use deterministic fixtures.
 - **Reproducible test environment** — CI fixes the runner image, Python patch version, locale/timezone, hash seed and pytest version.
 
-This release separates two concerns that previously collided in production: **finding opportunities** and **deciding whether the operator should be interrupted about them**.
+This work separates two concerns that previously collided in production: **finding opportunities** and **deciding whether the operator should be interrupted about them**.
 
 ## Civilization Arena
 
@@ -79,7 +82,8 @@ The `NotificationGovernor` applies three controls before delivery:
 
 1. **Fingerprinting** — identical severity/subject/body combinations map to a deterministic identifier.
 2. **Deduplication** — repeated copies of the same alert are suppressed during the configured dedupe window.
-3. **Rate limiting** — the number of outbound notifications is capped inside a rolling window.
+3. **Rate limiting** — the number of outbound notifications is capped inside the configured cycle and daily limits.
+4. **Durable circuit breaking** — provider quota failures are persisted so restarting the worker does not immediately retry the same exhausted SMTP quota.
 
 Delivery errors are contained. A provider-side quota/throttle failure returns a degraded result to the caller instead of causing the autonomous worker to repeatedly fail and restart. The governor is deliberately provider-agnostic, allowing Voroa/SMTP today and another notification provider later.
 
