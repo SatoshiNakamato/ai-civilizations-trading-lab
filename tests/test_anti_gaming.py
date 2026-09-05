@@ -1,0 +1,20 @@
+import pytest
+
+from civilizations.anti_gaming import ForecastKey, validate_forecast_batch
+
+
+def test_duplicate_identity_is_rejected():
+    key = ForecastKey("CIV-A", "BTCUSDT", "4h")
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_forecast_batch([key, key])
+
+
+def test_density_limit_is_per_market_and_horizon():
+    rows = [ForecastKey("CIV-A", "BTCUSDT", "4h"), ForecastKey("CIV-B", "BTCUSDT", "4h")]
+    with pytest.raises(ValueError, match="density"):
+        validate_forecast_batch(rows)
+
+
+def test_distinct_markets_are_allowed():
+    rows = [ForecastKey("CIV-A", "BTCUSDT", "4h"), ForecastKey("CIV-A", "ETHUSDT", "4h")]
+    assert validate_forecast_batch(rows) == tuple(rows)
