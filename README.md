@@ -80,11 +80,11 @@ python -m civilizations.core
 
 ## Endurance and constrained environments
 
-AEON is designed for constrained mobile/hosted environments. The runtime now measures **current** RSS on Linux/Android through `/proc/self/status` instead of treating `ru_maxrss` as current memory. Peak RSS is retained separately for diagnostics.
+AEON is designed for constrained mobile/hosted environments. The runtime measures **current** process RSS on Linux/Android through `/proc/self/status` instead of treating `ru_maxrss` as current memory. Peak process RSS is retained separately for diagnostics.
 
-The runtime also uses bounded histories, periodic garbage collection, adaptive active-agent scheduling and reduced persistence frequency during normal operation. Default thresholds remain below a 500 MB external runtime ceiling, leaving headroom for the host environment.
+When a Linux cgroup is available, the endurance layer also observes current cgroup memory. This gives hosted environments such as Voroa an early warning signal for platform-level memory pressure even when the Python process itself reports a much smaller RSS. The scheduler reacts to the larger observed value before the external 500 MB ceiling is reached.
 
-If Voroa reports high memory while the Python process reports low RSS, that indicates host/runtime overhead outside the Python process; AEON's health telemetry should be used to distinguish application RSS from platform-wide memory.
+The runtime uses bounded histories, periodic garbage collection, adaptive active-agent scheduling and reduced persistence frequency during normal operation. Default thresholds remain below a 500 MB external runtime ceiling, leaving headroom for the host environment.
 
 ## Safety
 
