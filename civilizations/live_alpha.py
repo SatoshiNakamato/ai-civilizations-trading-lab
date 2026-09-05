@@ -87,7 +87,7 @@ class LiveAlphaScanner:
         pair_address = str(pair.get("pairAddress") or "")
         url = f"https://dexscreener.com/{chain}/{pair_address}" if chain and pair_address else str(pair.get("url") or "")
         price = float(pair.get("priceUsd") or 0.0)
-        return AlphaToken(chain, address, symbol, name, pair_address, url, price, liquidity, volume, ch1, ch24, age_hours, buys, sells, age_hours, score)
+        return AlphaToken(chain, address, symbol, name, pair_address, url, price, liquidity, volume, ch1, ch24, total, buys, sells, age_hours, score)
 
     def scan(self, *, chains: tuple[str, ...] | None = None, limit: int = 5) -> list[AlphaToken]:
         self.scans += 1
@@ -129,30 +129,22 @@ class LiveAlphaScanner:
 
     def alert(self, token: AlphaToken, *, agent: str = "ALPHA-SCOUT") -> bool:
         key = f"{token.chain}:{token.address}"
-        last = self.seen.get(key, 0.0)
-        if time.time() - last < 86_400:
+        if time.time() - self.seen.get(key, 0.0) < 86_400:
             return False
         candidate = AlertCandidate(
-            title=f"New alpha token: {token.symbol}",
-            category="alpha-token",
+            title=f"New alpha token: {token.symbol}", category="alpha-token",
             summary=(f"Fresh public DEX pair detected for {token.name} ({token.symbol}). "
                      f"Age={token.age_hours:.1f}h; liquidity=${token.liquidity_usd:,.0f}; "
                      f"24h volume=${token.volume_24h_usd:,.0f}; 1h={token.price_change_1h:+.2f}%; "
                      f"24h={token.price_change_24h:+.2f}%; buys={token.buys_24h}, sells={token.sells_24h}. "
                      "Research alert only; verify liquidity, contract ownership and risk before acting."),
-            confidence=min(0.99, 0.70 + token.score * 0.29),
-            edge=max(0.005, min(0.50, token.score * 0.05)),
-            risk=0.35,
-            sources=("https://dexscreener.com",),
-            agent=agent,
-            token_address=token.address,
-            chain=token.chain,
-            url=token.url,
+            confidence=min(0.99, 0.70 + token.score * 0.29), edge=max(0.005, min(0.50, token.score * 0.05)),
+            risk=0.35, sources=("https://dexscreener.com",), agent=agent,
+            token_address=token.address, chain=token.chain, url=token.url,
         )
         sent = self.gateway.send(candidate)
         if sent:
-            self.seen[key] = time.time()
-            self.alerts += 1
+            self.seen[key] = time.time(); self.alerts += 1
         return sent
 
     def scan_and_alert(self, *, chains: tuple[str, ...] | None = None, limit: int = 5) -> list[AlphaToken]:
@@ -163,10 +155,4 @@ class LiveAlphaScanner:
         return tokens
 
     def snapshot(self) -> dict:
-        return {
-            "scans": self.scans,
-            "alerts": self.alerts,
-            "errors": self.errors,
-            "last_scan": [asdict(x) for x in self.last_scan],
-            "email": self.gateway.snapshot(),
-        }
+        return {"scans": self.scans, "alerts": self.alerts, "errors": self.errors, "last_scan": [asdict(x) for x in self.last_scan], "email": self.gateway.snapshot()}
