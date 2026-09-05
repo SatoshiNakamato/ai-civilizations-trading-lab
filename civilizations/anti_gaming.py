@@ -13,18 +13,18 @@ class ForecastKey:
 
 
 def validate_forecast_batch(keys: Iterable[ForecastKey], *, max_per_market: int = 1) -> tuple[ForecastKey, ...]:
-    """Validate forecast density independently for each civilization."""
+    """Validate forecast density independently for each civilization and market."""
     if max_per_market < 1:
         raise ValueError("max_per_market must be positive")
     seen: set[ForecastKey] = set()
-    counts: dict[tuple[str, str, str], int] = {}
+    counts: dict[tuple[str, str], int] = {}
     result: list[ForecastKey] = []
     for key in keys:
         if not all((key.civilization_id, key.market, key.horizon)):
             raise ValueError("forecast identity fields are required")
         if key in seen:
             raise ValueError("duplicate forecast identity")
-        bucket = (key.civilization_id, key.market, key.horizon)
+        bucket = (key.civilization_id, key.market)
         if counts.get(bucket, 0) >= max_per_market:
             raise ValueError("forecast density limit exceeded")
         seen.add(key)
