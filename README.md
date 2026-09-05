@@ -1,6 +1,6 @@
 # AEON — Artificial Evolutionary Organizational Network
 
-**Release: v0.4.0**
+**Release: v0.5.0**
 
 A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
@@ -11,15 +11,18 @@ A research-first simulation where 100 specialized AI market intelligences become
 
 **Project enquiries:** iNeed2p@wearehackerone.com
 
-## What is new
+## What is new in v0.5.0
 
-AEON combines individual cognition with an emergent social/economic layer. Agents form organizations, exchange bounded strategy memes, mutate hypotheses, accumulate social capital, research the public web, create world-scoped artifacts and compete for evidence-backed influence.
+AEON now adds a production-oriented **Notification Governor** and a hermetic CI boundary.
 
-The core loop is:
+- **Notification Governor** — critical/high/info alerts are fingerprinted, deduplicated and rate-limited before delivery.
+- **Provider isolation** — notification delivery is injected behind a small interface, so SMTP/provider failures cannot crash the civilization worker.
+- **Graceful degradation** — provider throttling such as SMTP `550 5.4.5` is recorded as degraded notification delivery rather than repeatedly retrying in the hot loop.
+- **Deterministic fingerprints** — identical alert content produces the same stable fingerprint across runs.
+- **Hermetic CI** — tests no longer depend on Binance public API availability. Market-dependent tests use deterministic fixtures.
+- **Reproducible test environment** — CI fixes the runner image, Python patch version, locale/timezone, hash seed and pytest version.
 
-**Observe → Research → Hypothesize → Validate → Debate → Share → Adopt → Mutate → Organize → Evolve**
-
-The civilization is not scripted to choose a winning strategy. The simulation supplies rules, resources and feedback; strategies and organizations emerge from repeated interaction.
+This release separates two concerns that previously collided in production: **finding opportunities** and **deciding whether the operator should be interrupted about them**.
 
 ## Civilization Arena
 
@@ -29,11 +32,9 @@ The Arena records immutable forecast commitments, accepts externally sourced out
 
 The Arena is provider-agnostic so external outcome evaluators can be connected without coupling the civilization engine to a single service. Forecasts are committed before resolution, and resolved outcomes cannot be silently replaced.
 
-The Arena is intended to evolve toward civilization-versus-civilization evaluation, hidden/out-of-sample evaluation and evolutionary selection based on externally verifiable results.
-
 ## Civilization systems
 
-AEON now wires twenty explicit civilization systems into the life loop:
+AEON wires twenty explicit civilization systems into the life loop:
 
 1. identity and individuality
 2. needs and wellbeing
@@ -66,8 +67,23 @@ These are simulation mechanisms, not a claim of literal consciousness or sentien
 - **Civilization Arena** — forecasts can be committed and evaluated against externally supplied outcomes with deterministic scoring and lineage-safe rankings.
 - **Trading intelligence** — arbitrage, research, prediction-market and risk modules remain available as civilization capabilities.
 - **Public-web research** — agents can consume bounded public HTTPS research inputs without unrestricted host access.
+- **Alert governance** — high-value findings can pass through a notification governor before external delivery.
 - **Bounded creation** — generated artifacts stay inside the civilization's world boundary.
 - **Alert-only live boundary** — live execution remains disabled by default and is not required to run the civilization.
+
+## Notification governance
+
+AEON treats operator notifications as a scarce resource rather than an unbounded side effect.
+
+The `NotificationGovernor` applies three controls before delivery:
+
+1. **Fingerprinting** — identical severity/subject/body combinations map to a deterministic identifier.
+2. **Deduplication** — repeated copies of the same alert are suppressed during the configured dedupe window.
+3. **Rate limiting** — the number of outbound notifications is capped inside a rolling window.
+
+Delivery errors are contained. A provider-side quota/throttle failure returns a degraded result to the caller instead of causing the autonomous worker to repeatedly fail and restart. The governor is deliberately provider-agnostic, allowing Voroa/SMTP today and another notification provider later.
+
+For trading alerts, notification is an **observation channel**, not an execution permission. A message about an arbitrage or token opportunity does not authorize a live order.
 
 ## Run locally
 
@@ -94,13 +110,14 @@ The worker uses a PID guard to avoid accidental duplicate runtimes and writes di
 
 ## Architecture
 
-- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics, endurance controls and Arena evaluation
+- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics, endurance controls, Arena evaluation and notification governance
 - `markets/` — normalized market data, arbitrage, prediction-market research and paper infrastructure
 - `simulation/` — continuous civilization workers
 - `backtesting/` — deterministic validation
 - `risk/` — exposure and safety gates
 - `web/` — local AEON console/API
-- `tests/` — automated regression, system-integration, Arena and endurance tests
+- `tests/` — automated regression, system-integration, Arena, endurance and notification-governance tests
+- `.github/workflows/` — deterministic, hermetic CI
 
 ## Endurance and constrained environments
 
@@ -123,6 +140,8 @@ Run the regression suite before contributing or releasing:
 ```bash
 python -m pytest -q
 ```
+
+The test suite is intentionally hermetic: tests that exercise civilization steps use deterministic market fixtures instead of depending on live exchange availability. Live-market integration belongs in explicit integration/evaluation environments.
 
 See `ARCHITECTURE.md`, `OPERATIONS.md`, `SECURITY.md` and `RELEASE_CHECKLIST.md` for project-level engineering and release documentation.
 
