@@ -10,6 +10,7 @@ from .world_dynamics import WorldDynamics
 from .notifications import NotificationGovernor, NotificationGovernorConfig, SMTPEmailSender
 from .agent_communication import AgentCommunicationBus
 from .learning_communication import CollectiveLearning
+from .evolution_frontier import EvolutionFrontier
 
 @dataclass(slots=True)
 class BeingDecision:
@@ -21,6 +22,7 @@ class AutonomousWorld:
         self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5
         self.notifications=NotificationGovernor(SMTPEmailSender(), NotificationGovernorConfig.from_env())
         self.collective=CollectiveLearning(AgentCommunicationBus(),seed=seed)
+        self.frontier=EvolutionFrontier()
         for aid,agent in self.runtime.civilization.agents.items(): self.platform.register(aid,{'archetype':agent.archetype})
     def _evolve(self,aid):
         s=self.life.states[aid]; model=self.life.self_models[aid]; scores={'explore':s.curiosity,'build':s.achievement,'socialize':s.belonging,'protect':s.security,'reflect':.35}; individuality=float(model.get('individuality',.5)); scores={k:max(0.,v+self.rng.uniform(-.05,.05)*individuality) for k,v in scores.items()}; action=max(scores,key=scores.get); old=str(model.get('purpose','discover')); choices={'explore':['discover','understand','invent'],'build':['build','invent','compete'],'socialize':['connect','protect','build'],'reflect':['understand myself']}; purpose=self.rng.choice(choices[action]) if action in choices and scores[action]>.45 else old; model['purpose']=purpose; hist=model.setdefault('preferred_actions',[]); hist.append(action); model['preferred_actions']=hist[-20:]
@@ -64,21 +66,28 @@ class AutonomousWorld:
                 self.decisions.append(BeingDecision(aid,tick,action,purpose,f'{action} selected from needs, memory, goals and individuality'))
             else:
                 evidence[aid]=f'{aid} retained prior purpose={purpose}; waiting for active execution while contributing prior knowledge.'
-        # Every registered agent participates in the knowledge exchange, while
-        # only the bounded active budget performs expensive world actions.
         exchanges=self.collective.round(ids,tick=tick,evidence=evidence)
         debate=self.collective.debate(ids,tick=tick,topic='collective research review') if tick % 3 == 0 else []
         for exchange in exchanges:
             if exchange.adopted:
                 self.platform.learn(exchange.recipient,exchange.topic,evidence.get(exchange.sender,''),exchange.confidence,tick)
+                self.frontier.remember_research(tick,exchange.recipient,exchange.topic,evidence.get(exchange.sender,''),exchange.confidence)
+        if debate:
+            self.frontier.record_experiment(tick,'collective','adversarial research review',f'{len(debate)} debate contributions recorded',min(1.0,len(debate)/max(1,len(ids))))
+        diagnostics=self.frontier.diagnose(tick,active,len(exchanges),len(debate))
         dynamics=self.dynamics.tick(active,tick)
         self.platform.generation(tick)
+        if tick % 5 == 0 and exchanges:
+            lead=exchanges[0]
+            patch=f'# governed mutation proposal\n# derived from collective evidence\n# topic: {lead.topic}\n# confidence: {lead.confidence:.3f}\n'
+            self.frontier.propose_mutation(tick,lead.recipient,f'collective-{lead.topic}', 'Candidate improvement generated from peer evidence and adversarial review.', patch)
+            self.frontier.record_genealogy(tick,lead.recipient,[lead.sender], 'knowledge adoption')
         self.decisions=self.decisions[-100:]
         collect()
         guard=self.endurance.check(tick,self.platform.active_budget); self.platform.active_budget=guard['active_budget']
         should_persist=(tick == 1 or tick % self.persist_every == 0 or guard['level'] != 'normal')
         if should_persist:self.platform.save()
-        snapshot=self.life.snapshot(ids); snapshot.update({'tick':tick,'recent_decisions':[asdict(x) for x in self.decisions[-20:]],'internet_learning':web_learning,'internet':self.world.snapshot(),'civilization':self.platform.snapshot(),'observatory':self.platform.observatory(),'dynamics':dynamics,'memory':memory_snapshot(),'endurance':guard,'notifications':self.notifications.snapshot(),'collective_learning':self.collective.snapshot(),'collective_exchange_count':len(exchanges),'collective_debate_count':len(debate)})
+        snapshot=self.life.snapshot(ids); snapshot.update({'tick':tick,'recent_decisions':[asdict(x) for x in self.decisions[-20:]],'internet_learning':web_learning,'internet':self.world.snapshot(),'civilization':self.platform.snapshot(),'observatory':self.platform.observatory(),'dynamics':dynamics,'memory':memory_snapshot(),'endurance':guard,'notifications':self.notifications.snapshot(),'collective_learning':self.collective.snapshot(),'collective_exchange_count':len(exchanges),'collective_debate_count':len(debate),'evolution_frontier':self.frontier.command_snapshot(tick,diagnostics,self.collective.snapshot(),getattr(self.platform,'generation_count',None))})
         if should_persist:(self.root/'latest.json').write_text(json.dumps(snapshot,separators=(',',':'),default=str),encoding='utf-8')
         return snapshot
     def run(self,steps=1):
