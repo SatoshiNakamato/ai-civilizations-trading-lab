@@ -7,15 +7,16 @@ from .civilization_platform import CivilizationPlatform
 from .memory_guard import collect, snapshot as memory_snapshot
 from .endurance import EnduranceController
 from .world_dynamics import WorldDynamics
+from .notification_governor import NotificationGovernor
 
 @dataclass(slots=True)
 class BeingDecision:
     agent:str; tick:int; action:str; purpose:str; reason:str
 
 class AutonomousWorld:
-    """Bounded-cost life loop with Voroa/mobile endurance controls."""
+    """Bounded-cost life loop with governed external research and alerts."""
     def __init__(self,runtime,root='world_state',seed=42):
-        self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5
+        self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5; self.notifications=NotificationGovernor()
         for aid,agent in self.runtime.civilization.agents.items(): self.platform.register(aid,{'archetype':agent.archetype})
     def _evolve(self,aid):
         s=self.life.states[aid]; model=self.life.self_models[aid]; scores={'explore':s.curiosity,'build':s.achievement,'socialize':s.belonging,'protect':s.security,'reflect':.35}; individuality=float(model.get('individuality',.5)); scores={k:max(0.,v+self.rng.uniform(-.05,.05)*individuality) for k,v in scores.items()}; action=max(scores,key=scores.get); old=str(model.get('purpose','discover')); choices={'explore':['discover','understand','invent'],'build':['build','invent','compete'],'socialize':['connect','protect','build'],'reflect':['understand myself']}; purpose=self.rng.choice(choices[action]) if action in choices and scores[action]>.45 else old; model['purpose']=purpose; hist=model.setdefault('preferred_actions',[]); hist.append(action); model['preferred_actions']=hist[-20:]
@@ -29,7 +30,11 @@ class AutonomousWorld:
                 first=results[0]; self.life.remember(aid,tick,f"I searched for '{query}' and found {first.get('title','untitled')} — {first.get('url','')}",'web_learning',.75); self.life.states[aid].curiosity=min(1.,self.life.states[aid].curiosity+.03); self.platform.learn(aid,query,first.get('excerpt','')[:300],.7,tick); return {'query':query,'results':results}
         except Exception as exc:self.life.remember(aid,tick,f'Internet search failed: {type(exc).__name__}','web_failure',.2)
         return {'query':query,'results':[]}
+    def notify_opportunity(self, *, severity: str, subject: str, body: str) -> dict:
+        """Send a governed operator alert; notification failures cannot break a cycle."""
+        return self.notifications.notify(severity=severity, subject=subject, body=body)
     def step(self):
+        self.notifications.begin_cycle()
         ids=list(self.runtime.civilization.agents); tick_next=self.runtime.civilization.tick+1
         guard=self.endurance.check(tick_next,self.platform.active_budget); self.platform.active_budget=guard['active_budget']; active=self.platform.schedule(ids,tick_next); self.runtime.civilization.step(active_ids=active); tick=self.runtime.civilization.tick; web_learning=None
         for aid in active:
@@ -48,7 +53,6 @@ class AutonomousWorld:
             if tick%5==0:self.life.reflect(aid,tick)
             self.platform.evolve(aid,tick)
             self.decisions.append(BeingDecision(aid,tick,action,purpose,f'{action} selected from needs, memory, goals and individuality'))
-        # Civilization-scale systems: all twenty feature hooks advance here.
         dynamics=self.dynamics.tick(active,tick)
         self.platform.generation(tick)
         self.decisions=self.decisions[-100:]
@@ -56,7 +60,7 @@ class AutonomousWorld:
         guard=self.endurance.check(tick,self.platform.active_budget); self.platform.active_budget=guard['active_budget']
         should_persist=(tick == 1 or tick % self.persist_every == 0 or guard['level'] != 'normal')
         if should_persist:self.platform.save()
-        snapshot=self.life.snapshot(ids); snapshot.update({'tick':tick,'recent_decisions':[asdict(x) for x in self.decisions[-20:]],'internet_learning':web_learning,'internet':self.world.snapshot(),'civilization':self.platform.snapshot(),'observatory':self.platform.observatory(),'dynamics':dynamics,'memory':memory_snapshot(),'endurance':guard})
+        snapshot=self.life.snapshot(ids); snapshot.update({'tick':tick,'recent_decisions':[asdict(x) for x in self.decisions[-20:]],'internet_learning':web_learning,'internet':self.world.snapshot(),'civilization':self.platform.snapshot(),'observatory':self.platform.observatory(),'dynamics':dynamics,'memory':memory_snapshot(),'endurance':guard,'notifications':self.notifications.snapshot()})
         if should_persist:(self.root/'latest.json').write_text(json.dumps(snapshot,separators=(',',':'),default=str),encoding='utf-8')
         return snapshot
     def run(self,steps=1):
