@@ -9,10 +9,18 @@ def test_duplicate_identity_is_rejected():
         validate_forecast_batch([key, key])
 
 
-def test_density_limit_is_per_market_and_horizon():
-    rows = [ForecastKey("CIV-A", "BTCUSDT", "4h"), ForecastKey("CIV-B", "BTCUSDT", "4h")]
+def test_density_limit_is_per_civilization_market_and_horizon():
+    rows = [
+        ForecastKey("CIV-A", "BTCUSDT", "4h"),
+        ForecastKey("CIV-A", "BTCUSDT", "4h"),
+    ]
     with pytest.raises(ValueError, match="density"):
         validate_forecast_batch(rows)
+
+
+def test_different_civilizations_can_forecast_same_market():
+    rows = [ForecastKey("CIV-A", "BTCUSDT", "4h"), ForecastKey("CIV-B", "BTCUSDT", "4h")]
+    assert validate_forecast_batch(rows) == tuple(rows)
 
 
 def test_distinct_markets_are_allowed():
