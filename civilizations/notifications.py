@@ -45,7 +45,7 @@ class NotificationGovernorConfig:
     window_seconds: float = 300.0
     dedupe_seconds: float = 3600.0
     max_per_day: int = 20
-    cooldown_seconds: float = 900.0
+    cooldown_seconds: float = 0.0
     min_severity: str = "HIGH"
     enabled: bool = True
     email_enabled: bool = True
@@ -60,7 +60,7 @@ class NotificationGovernorConfig:
         return cls(
             max_notifications=_int("AEON_NOTIFICATION_MAX_PER_CYCLE", 3, 1),
             window_seconds=_float("AEON_NOTIFICATION_WINDOW_SECONDS", 300.0),
-            dedupe_seconds=_float("AEON_NOTIFICATION_DEDUP_WINDOW_SECONDS", 3600.0),
+            dedupe_seconds=_float("AEON_NOTIFICATION_DEDUP_WINDOW_SECONDS", 86400.0),
             max_per_day=_int("AEON_NOTIFICATION_MAX_PER_DAY", 20, 1),
             cooldown_seconds=_float("AEON_NOTIFICATION_COOLDOWN_SECONDS", 900.0),
             min_severity=severity,
@@ -131,6 +131,7 @@ class NotificationGovernor:
         return time.strftime("%Y-%m-%d", time.localtime(self.clock()))
 
     def begin_cycle(self) -> None:
+        """Reset only the per-cycle allowance; call once at cycle start."""
         self._sent_times.clear()
         today = self._today()
         if today != self._day:
@@ -153,7 +154,12 @@ class NotificationGovernor:
         if SEVERITY[severity] < SEVERITY[self.config.min_severity]:
             return NotificationResult(False, "below_min_severity", fp)
         now = self.clock()
-        self.begin_cycle()
+        today = self._today()
+        if today != self._day:
+            self._day = today
+            self._day_count = 0
+            self._last_seen.clear()
+        self._sent_times = [t for t in self._sent_times if now - t < self.config.window_seconds]
         if len(self._sent_times) >= self.config.max_notifications:
             return NotificationResult(False, "rate_limited_cycle", fp)
         if self._day_count >= self.config.max_per_day:
@@ -167,8 +173,7 @@ class NotificationGovernor:
         try:
             self.sender(notification)
         except Exception as exc:
-            # SMTP 550/5.4.5 and other provider failures must never escape into
-            # the civilization worker. Failed delivery is not counted as sent.
+            # SMTP 550/5.4.5 and other provider failures never escape into the worker.
             self._last_seen[fp] = now
             return NotificationResult(False, f"delivery_degraded:{type(exc).__name__}", fp)
         self._sent_times.append(now)
