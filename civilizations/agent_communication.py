@@ -53,12 +53,18 @@ class AgentCommunicationBus:
     The bus is intentionally capability-oriented: agents get message
     operations, not arbitrary filesystem access. Messages are JSONL records so
     the civilization can inspect and replay its communication history.
+
+    ``max_messages`` is a bounded active-segment quota. When the segment fills,
+    it is rotated into an immutable archive instead of crashing the civilization.
+    This preserves history while preventing unbounded growth of the hot log.
     """
 
     def __init__(self, config: CommunicationConfig | None = None):
         self.config = config or CommunicationConfig.from_env()
         self.root = self.config.root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.archive_root = self.root / "archive"
+        self.archive_root.mkdir(parents=True, exist_ok=True)
         self.log_path = self.root / "messages.jsonl"
         self.audit_path = self.root / "communication_audit.jsonl"
 
@@ -78,6 +84,23 @@ class AgentCommunicationBus:
         if not self.log_path.exists():
             return 0
         return sum(1 for _ in self.log_path.open("r", encoding="utf-8"))
+
+    def _rotate_if_full(self) -> None:
+        """Archive a full active segment so long-running workers can continue."""
+        if self._count() < self.config.max_messages:
+            return
+        if not self.log_path.exists() or self.log_path.stat().st_size == 0:
+            return
+        stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+        archive = self.archive_root / f"messages-{stamp}-{time.time_ns()}.jsonl"
+        self.log_path.replace(archive)
+        with self.audit_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({
+                "action": "rotate",
+                "archive": str(archive),
+                "reason": "active message quota reached",
+                "timestamp": time.time(),
+            }, sort_keys=True) + "\n")
 
     def publish(
         self,
@@ -99,8 +122,10 @@ class AgentCommunicationBus:
             raise ValueError("message exceeds communication size limit")
         if ttl_seconds is not None and (ttl_seconds < 1 or ttl_seconds > 7 * 86400):
             raise ValueError("invalid message TTL")
-        if self._count() >= self.config.max_messages:
-            raise RuntimeError("communication message quota exhausted")
+
+        # Rotate before writing, rather than treating historical messages as a
+        # permanent failure condition for the worker.
+        self._rotate_if_full()
 
         stamp = time.time()
         raw = f"{sender}|{recipient}|{topic}|{stamp}|{body}".encode("utf-8")
