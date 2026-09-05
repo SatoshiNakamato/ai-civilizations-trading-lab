@@ -19,7 +19,7 @@ def test_depth_verification_rejects_insufficient_liquidity(tmp_path):
     )
     scanner._clients["cheap"] = FakeExchange({"timestamp": 1_000_000, "asks": [[100, 0.1]], "bids": []})
     scanner._clients["rich"] = FakeExchange({"timestamp": 1_000_000, "asks": [], "bids": [[105, 0.1]]})
-    scanner.max_quote_age_seconds = 10_000_000
+    scanner.max_quote_age_seconds = 10_000_000_000
     buy = MarketQuote("cheap", "BTC/USDT", 99, 100, 1, 1, 1_000_000)
     sell = MarketQuote("rich", "BTC/USDT", 104, 105, 1, 1, 1_000_000)
     assert scanner._depth_verify(buy, sell) is None
@@ -33,7 +33,7 @@ def test_opportunity_is_marked_executable_only_after_depth_check(tmp_path):
     )
     scanner._clients["cheap"] = FakeExchange({"timestamp": 1_000_000, "asks": [[100, 2]], "bids": []})
     scanner._clients["rich"] = FakeExchange({"timestamp": 1_000_000, "asks": [], "bids": [[105, 2]]})
-    scanner.max_quote_age_seconds = 10_000_000
+    scanner.max_quote_age_seconds = 10_000_000_000
     scanner._quotes = {
         "BTC/USDT": [
             MarketQuote("cheap", "BTC/USDT", 99, 100, 2, 2, 1_000_000),
