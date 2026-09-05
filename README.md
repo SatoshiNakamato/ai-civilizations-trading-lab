@@ -6,31 +6,54 @@ A research-first simulation where 100 specialized AI market intelligences become
 
 ## What is new
 
-AEON extends the original trading laboratory with an emergent social/economic layer. Agents do not merely generate trading ideas: they form organizations, exchange bounded strategy memes, mutate hypotheses, accumulate social capital and compete for evidence-backed influence.
+AEON combines individual cognition with an emergent social/economic layer. Agents form organizations, exchange bounded strategy memes, mutate hypotheses, accumulate social capital, research the public web, create world-scoped artifacts and compete for evidence-backed influence.
 
 The core loop is:
 
 **Observe → Research → Hypothesize → Validate → Debate → Share → Adopt → Mutate → Organize → Evolve**
 
-The important distinction is that the civilization is not scripted to choose a winning strategy. The simulation supplies rules, resources and feedback; strategies and organizations emerge from repeated interaction.
+The civilization is not scripted to choose a winning strategy. The simulation supplies rules, resources and feedback; strategies and organizations emerge from repeated interaction.
 
-## Civilization primitives
+## Civilization systems
+
+AEON now wires twenty explicit civilization systems into the life loop:
+
+1. identity and individuality
+2. needs and wellbeing
+3. adaptive goals
+4. bounded memory
+5. reflection
+6. relationships and trust
+7. culture and norms
+8. organizations
+9. economy and prices
+10. jobs and rewards
+11. contracts
+12. research and learning
+13. experiments
+14. discoveries
+15. reputation
+16. innovation and artifacts
+17. lineage/succession markers
+18. migration between world locations
+19. adaptive governance
+20. endurance and bounded resource usage
+
+These are simulation mechanisms, not a claim of literal consciousness or sentience.
+
+## Research and trading intelligence
 
 - **100 agents** across quant, arbitrage, macro, momentum, value, contrarian, risk, probability, microstructure and exploration roles.
 - **Strategy memes** — bounded information objects that can be adopted, challenged and mutated inside the simulation.
-- **Organizations** — agents can form mission-driven guilds with members, treasury and influence.
-- **Social capital** — cooperation becomes a measurable resource.
-- **Discovery and innovation** — evidence-backed discoveries and mutations become civilization-level state.
-- **Evidence loop** — market hypotheses remain subject to real-data validation and out-of-sample checks.
+- **Evidence loop** — hypotheses remain subject to real-data validation and out-of-sample checks.
 - **Trading intelligence** — arbitrage, research, prediction-market and risk modules remain available as civilization capabilities.
-- **Public-web research** — agents can consume bounded public HTTPS research inputs without receiving unrestricted host access.
+- **Public-web research** — agents can consume bounded public HTTPS research inputs without unrestricted host access.
 - **Bounded creation** — generated artifacts stay inside the civilization's world boundary.
-- **Adaptive endurance** — long-running simulations monitor process memory, periodically collect garbage and reduce active workload when memory pressure rises.
 - **Alert-only live boundary** — live execution remains disabled by default and is not required to run the civilization.
 
 ## Run locally
 
-Install the dependencies and start the public web interface:
+Install dependencies and start the public web interface:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -47,19 +70,21 @@ python -m civilizations.core
 
 ## Architecture
 
-- `civilizations/` — agents, cognition, research, society, evolution, emergence and endurance controls
+- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics and endurance controls
 - `markets/` — normalized market data, arbitrage, prediction-market research and paper infrastructure
 - `simulation/` — continuous civilization workers
 - `backtesting/` — deterministic validation
 - `risk/` — exposure and safety gates
 - `web/` — local AEON console/API
-- `tests/` — automated regression and endurance tests
+- `tests/` — automated regression, system-integration and endurance tests
 
-## Endurance and resource limits
+## Endurance and constrained environments
 
-AEON is designed to remain usable on constrained environments. The runtime uses bounded histories, periodic garbage collection, adaptive active-agent scheduling and process-level RSS telemetry. The default endurance thresholds are intentionally below a 500 MB external runtime ceiling, leaving headroom for the host environment.
+AEON is designed for constrained mobile/hosted environments. The runtime now measures **current** RSS on Linux/Android through `/proc/self/status` instead of treating `ru_maxrss` as current memory. Peak RSS is retained separately for diagnostics.
 
-The simulation's world boundary is separate from the host operating system. World artifacts are not equivalent to arbitrary host filesystem access, and autonomous code execution is not enabled by default.
+The runtime also uses bounded histories, periodic garbage collection, adaptive active-agent scheduling and reduced persistence frequency during normal operation. Default thresholds remain below a 500 MB external runtime ceiling, leaving headroom for the host environment.
+
+If Voroa reports high memory while the Python process reports low RSS, that indicates host/runtime overhead outside the Python process; AEON's health telemetry should be used to distinguish application RSS from platform-wide memory.
 
 ## Safety
 
