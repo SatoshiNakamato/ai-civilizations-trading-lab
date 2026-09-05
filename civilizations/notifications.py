@@ -51,6 +51,7 @@ class NotificationGovernorConfig:
     email_enabled: bool = True
     digest_enabled: bool = False
     digest_interval_seconds: float = 3600.0
+    dedupe_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "NotificationGovernorConfig":
@@ -68,6 +69,7 @@ class NotificationGovernorConfig:
             email_enabled=_bool("AEON_NOTIFICATION_EMAIL_ENABLED", True),
             digest_enabled=_bool("AEON_NOTIFICATION_DIGEST_ENABLED", False),
             digest_interval_seconds=_float("AEON_NOTIFICATION_DIGEST_INTERVAL_SECONDS", 3600.0),
+            dedupe_enabled=_bool("AEON_NOTIFICATION_DEDUP_ENABLED", True),
         )
 
 
@@ -128,6 +130,8 @@ class NotificationGovernor:
         self._day = self._today()
         self._day_count = 0
         self._last_sent = 0.0
+        self._circuit_until = 0.0
+        self._last_error: str | None = None
 
     def _today(self) -> str:
         return time.strftime("%Y-%m-%d", time.localtime(self.clock()))
@@ -140,11 +144,27 @@ class NotificationGovernor:
             self._day_count = 0
             self._last_seen.clear()
             self._last_sent = 0.0
+            self._circuit_until = 0.0
+            self._last_error = None
 
     @staticmethod
     def fingerprint(severity: str, subject: str, body: str) -> str:
         payload = "|".join((severity.strip().lower(), subject.strip(), body.strip()))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _is_daily_quota_error(exc: BaseException) -> bool:
+        code = getattr(exc, "smtp_code", None)
+        detail = getattr(exc, "smtp_error", "")
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        text = str(detail).lower()
+        return code in {421, 450, 451, 452, 550, 552, 554} and (
+            "5.4.5" in text
+            or "daily user sending limit" in text
+            or "sending limit" in text
+            or "quota" in text
+        )
 
     def notify(self, severity: str, subject: str, body: str) -> NotificationResult:
         severity = severity.strip().upper()
@@ -162,29 +182,49 @@ class NotificationGovernor:
             self._day_count = 0
             self._last_seen.clear()
             self._last_sent = 0.0
+            self._circuit_until = 0.0
+            self._last_error = None
         self._sent_times = [t for t in self._sent_times if now - t < self.config.window_seconds]
+        if now < self._circuit_until:
+            return NotificationResult(False, "smtp_circuit_open", fp)
         if len(self._sent_times) >= self.config.max_notifications:
             return NotificationResult(False, "rate_limited", fp)
         if self._day_count >= self.config.max_per_day:
             return NotificationResult(False, "rate_limited_day", fp)
         if self.config.cooldown_seconds and self._last_sent and now - self._last_sent < self.config.cooldown_seconds:
             return NotificationResult(False, "cooldown", fp)
-        previous = self._last_seen.get(fp)
-        if self.config.dedupe_seconds and previous is not None and now - previous < self.config.dedupe_seconds:
-            return NotificationResult(False, "deduplicated", fp)
+        if self.config.dedupe_enabled:
+            previous = self._last_seen.get(fp)
+            if previous is not None and now - previous < self.config.dedupe_seconds:
+                return NotificationResult(False, "deduplicated", fp)
         notification = Notification(severity.lower(), subject, body, fp)
         try:
             self.sender(notification)
         except Exception as exc:
-            # Provider failures, including Gmail 550/5.4.5 quota responses,
-            # are isolated from the civilization worker.
             self._last_seen[fp] = now
+            self._last_error = type(exc).__name__
+            if self._is_daily_quota_error(exc):
+                local = time.localtime(now)
+                tomorrow = time.mktime((local.tm_year, local.tm_mon, local.tm_mday + 1, 0, 0, 0, 0, 0, -1))
+                self._circuit_until = max(now + 300.0, tomorrow + 1.0)
+                return NotificationResult(False, "smtp_quota", fp)
+            self._circuit_until = now + max(self.config.cooldown_seconds, 300.0)
             return NotificationResult(False, f"delivery_degraded:{type(exc).__name__}", fp)
         self._sent_times.append(now)
         self._last_seen[fp] = now
         self._last_sent = now
         self._day_count += 1
+        self._last_error = None
         return NotificationResult(True, "sent", fp)
+
+    def snapshot(self):
+        return {
+            "cycle_sent": len(self._sent_times),
+            "day_sent": self._day_count,
+            "day": self._day,
+            "circuit_open": self.clock() < self._circuit_until,
+            "last_error": self._last_error,
+        }
 
 
 __all__ = ["Notification", "NotificationGovernor", "NotificationGovernorConfig", "NotificationResult", "SMTPEmailSender"]
