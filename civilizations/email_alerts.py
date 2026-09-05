@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from time import time
+from datetime import datetime, timezone
 
 from .notifications import NotificationGovernor, SMTPEmailSender
 
@@ -24,6 +25,11 @@ class AlertCandidate:
     sell_venue: str = ""
     buy_price: float = 0.0
     sell_price: float = 0.0
+    observed_at: float = 0.0
+    quantity: float = 0.0
+    notional_usd: float = 0.0
+    executable: bool = False
+    verification: str = ""
 
     @property
     def severity(self) -> str:
@@ -53,11 +59,11 @@ class EmailAlertGateway:
         self.suppressed = 0
         if governor is None:
             sender = SMTPEmailSender(recipient=self.recipient)
-            governor = NotificationGovernor(sender)
+            governor = NotificationGovernor()
         self.governor = governor
 
     def enabled(self) -> bool:
-        return bool(self.governor.config.enabled and self.governor.config.email_enabled and self.governor.sender)
+        return bool(self.governor.config.enabled and self.governor.config.email_enabled)
 
     def should_alert(self, candidate: AlertCandidate) -> bool:
         if candidate.severity not in {"CRITICAL", "HIGH"}:
@@ -65,6 +71,8 @@ class EmailAlertGateway:
         if candidate.confidence < self.min_confidence:
             return False
         if candidate.category in {"arbitrage", "alpha-token"} and candidate.edge < self.min_edge:
+            return False
+        if candidate.category == "arbitrage" and not candidate.executable:
             return False
         key = f"{candidate.category}:{candidate.title.strip().lower()}"
         if time() - self.last_sent.get(key, 0) < self.cooldown_seconds:
@@ -83,7 +91,18 @@ class EmailAlertGateway:
         if candidate.url:
             details.append(f"Link: {candidate.url}")
         if candidate.buy_venue and candidate.sell_venue:
-            details.append(f"Route: buy {candidate.buy_venue} @ {candidate.buy_price:.8g}; sell {candidate.sell_venue} @ {candidate.sell_price:.8g}")
+            details.append(f"Route: buy {candidate.buy_venue} @ {candidate.buy_price:.10g}; sell {candidate.sell_venue} @ {candidate.sell_price:.10g}")
+        if candidate.observed_at:
+            observed = datetime.fromtimestamp(candidate.observed_at, tz=timezone.utc).isoformat()
+            details.append(f"Observed at: {observed}")
+        if candidate.quantity:
+            details.append(f"Quantity: {candidate.quantity:.12g}")
+        if candidate.notional_usd:
+            details.append(f"USD notional: ${candidate.notional_usd:.2f}")
+        if candidate.executable:
+            details.append("Execution status: VERIFIED PUBLIC-L2 OPPORTUNITY (manual execution only)")
+        if candidate.verification:
+            details.append(f"Verification: {candidate.verification}")
         body = (
             f"Category: {candidate.category}\n"
             f"Severity: {candidate.severity}\n"
@@ -101,8 +120,8 @@ class EmailAlertGateway:
         if not self.should_alert(candidate):
             return False
         subject, body = self._message(candidate)
-        result = self.governor.notify(candidate.severity, subject, body)
-        if result.sent:
+        result = self.governor.notify(severity=candidate.severity, subject=subject, body=body)
+        if result.get("sent"):
             key = f"{candidate.category}:{candidate.title.strip().lower()}"
             self.last_sent[key] = time()
             self.sent += 1
@@ -118,9 +137,5 @@ class EmailAlertGateway:
             "suppressed": self.suppressed,
             "min_confidence": self.min_confidence,
             "min_edge": self.min_edge,
-            "governor": {
-                "cycle_sent": len(self.governor._sent_times),
-                "day_sent": self.governor._day_count,
-                "day": self.governor._day,
-            },
+            "governor": self.governor.snapshot(),
         }
