@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.0] - 2026-09-05
+### V5 frontier hardening
+- Integrated collective communication and learning into the 100-agent autonomous world cycle.
+- Added governed frontier evolution records for research memory, experiments, genealogy and replay.
+- Added constitution and self-diagnosis state to the frontier command snapshot.
+- Added governed mutation proposals; agents can propose source changes but cannot write source code directly.
+- Added explicit documentation for the frontier evolution loop and safety boundary.
+- Kept GitHub persistence optional and restricted to governed artifact namespaces/non-main evolution branches.
+
 ## [0.4.0] - 2026-09-05
 ### Release candidate hardening
 - Added durable civilization state snapshots with safe atomic persistence.
