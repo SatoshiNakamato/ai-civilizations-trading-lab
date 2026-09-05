@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.0] - 2026-09-05
+### Release candidate hardening
+- Added durable civilization state snapshots with safe atomic persistence.
+- Added bounded cross-generation civilization memory.
+- Added a bounded autonomous scheduler for repeated civilization cycles.
+- Added an explicit execution boundary with paper execution and live-execution safeguards.
+- Preserved provider-agnostic market discovery and all-pair support rather than hard-coding a small asset set.
+- Extended end-to-end coverage across arena, evidence, anti-gaming, audit, tournament, scoring, fitness, selection, lineage, evolution, generation and runtime components.
+- Release validation suite reaches 164 passing tests before this metadata-only release commit.
+
 ## [0.2.0] - 2026-09-05
 ### Release hardening
 - Twenty civilization systems are integrated into the autonomous life loop.
