@@ -31,6 +31,13 @@ class Opportunity:
     created_at: float = field(default_factory=time.time)
     validated_at: float = 0.0
     rejection_reason: str = ""
+    observed_at: float = 0.0
+    quantity: float = 0.0
+    notional_usd: float = 0.0
+    buy_depth: float = 0.0
+    sell_depth: float = 0.0
+    executable: bool = False
+    verification: str = ""
 
     @property
     def net_edge(self) -> float:
@@ -114,11 +121,6 @@ class OpportunityEngine:
 
     @staticmethod
     def score(o: Opportunity) -> float:
-        """Return a 0..1 quality score.
-
-        Edge is normalized conservatively: a 2% net edge contributes the full
-        edge component, while confidence, liquidity and inverse risk dominate.
-        """
         edge = max(0.0, min(1.0, o.net_edge / 0.02))
         return round(
             0.40 * o.confidence
@@ -144,7 +146,7 @@ class OpportunityEngine:
     ) -> str | None:
         if opportunity.status != "validated":
             return None
-        if opportunity.category == "arbitrage" and opportunity.net_edge < 0.005:
+        if opportunity.category == "arbitrage" and (opportunity.net_edge < 0.005 or not opportunity.executable):
             return None
         if opportunity.score >= critical_score:
             self.stats["alerts"] += 1
