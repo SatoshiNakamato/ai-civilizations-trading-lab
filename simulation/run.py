@@ -13,6 +13,9 @@ STOP = False
 def _stop(_signum, _frame):
     global STOP
     STOP = True
+    # Interrupt an in-flight Python operation so a hosted worker does not wait
+    # indefinitely for a slow network/research call before honoring shutdown.
+    raise KeyboardInterrupt("worker shutdown requested")
 
 
 def _float_env(name: str, default: float) -> float:
@@ -42,7 +45,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     data_dir = Path(os.getenv("CIVILIZATION_DATA_DIR", "data/civilization"))
-    interval = max(1.0, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
+    interval = max(0.1, _float_env("CIVILIZATION_CYCLE_INTERVAL", 30.0))
     count = max(1, _int_env("CIVILIZATION_AGENT_COUNT", 100))
     agents = [f"A{i:03d}" for i in range(1, count + 1)]
     state_path = data_dir / "worker_state.json"
@@ -76,6 +79,16 @@ def main() -> int:
     if startup_error:
         print(f"STARTUP DEGRADED {startup_error}", flush=True)
 
+    _write_json(heartbeat_path, {
+        "status": "degraded" if startup_error else "starting",
+        "cycle": cycle,
+        "agents": count,
+        "last_cycle_at": None,
+        "elapsed": 0.0,
+        "error": startup_error,
+        "result": None,
+    })
+
     while not STOP:
         started = time.time()
         cycle += 1
@@ -89,16 +102,39 @@ def main() -> int:
                 civilization.cycle_count = cycle - 1
                 orchestrator = CivilizationOrchestrator({"trading_civilization": civilization})
                 orchestrator.state.cycles = cycle - 1
+            _write_json(heartbeat_path, {
+                "status": "running",
+                "cycle": cycle,
+                "agents": count,
+                "last_cycle_at": time.time(),
+                "elapsed": 0.0,
+                "error": None,
+                "result": None,
+            })
             result = orchestrator.cycle()
             cycle = civilization.cycle_count
             startup_error = None
             error = None
+        except KeyboardInterrupt:
+            if STOP:
+                break
+            error = "KeyboardInterrupt"
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
             print(f"CYCLE ERROR cycle={cycle} {error}", flush=True)
 
+        if STOP:
+            break
         try:
-            _write_json(heartbeat_path, {"status": "degraded" if error else "running", "cycle": cycle, "agents": count, "last_cycle_at": time.time(), "elapsed": time.time() - started, "error": error, "result": result})
+            _write_json(heartbeat_path, {
+                "status": "degraded" if error else "running",
+                "cycle": cycle,
+                "agents": count,
+                "last_cycle_at": time.time(),
+                "elapsed": time.time() - started,
+                "error": error,
+                "result": result,
+            })
             _write_json(state_path, {"cycles": cycle, "updated_at": time.time()})
         except BaseException as exc:
             print(f"STATE ERROR {type(exc).__name__}: {exc}", flush=True)

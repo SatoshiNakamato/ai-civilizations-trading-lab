@@ -1,39 +1,99 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from civilizations.live_arbitrage import LiveArbitrageScanner, PublicQuoteFeed, Quote
-from civilizations.opportunities import OpportunityEngine
+
+from civilizations.email_alerts import EmailAlertGateway
+from civilizations.opportunities import Opportunity, OpportunityEngine
+from markets.multi_exchange_arbitrage import MultiExchangeArbitrageScanner
 from markets.paper_execution import PaperExecutionEngine
 from markets.trader_leaderboard import TraderLeaderboard
 
+
 @dataclass
 class ArbitrageRuntime:
-    scanner: LiveArbitrageScanner
+    scanner: object
     paper: PaperExecutionEngine
     leaderboard: TraderLeaderboard
+    live_executor: object | None = None
 
     @classmethod
-    def build(cls, audit_path="data/arbitrage_audit.jsonl", fills_path="data/paper_fills.jsonl"):
-        engine=OpportunityEngine(audit_path)
-        return cls(LiveArbitrageScanner(PublicQuoteFeed(), engine), PaperExecutionEngine(fills_path), TraderLeaderboard())
+    def build(
+        cls,
+        audit_path="data/arbitrage_audit.jsonl",
+        fills_path="data/paper_fills.jsonl",
+    ):
+        engine = OpportunityEngine(audit_path)
+        gateway = EmailAlertGateway()
+        scanner = MultiExchangeArbitrageScanner(engine=engine, alert_gateway=gateway)
+        return cls(scanner, PaperExecutionEngine(fills_path), TraderLeaderboard(), None)
 
     def scan_and_open(self, agent="ARB-TRADER"):
-        opportunity=self.scanner.scan_once()
-        if opportunity is None or opportunity.status != "validated":
+        """Scan public markets and record a paper fill for the best opportunity.
+
+        Alerts remain notification-only; the paper fill is bookkeeping used by
+        the convergence observer and leaderboard. No live order is submitted.
+        """
+        opportunity = self.scanner.scan_once()
+        if opportunity is None:
+            return None
+        if not isinstance(opportunity, Opportunity):
             return None
         return self.paper.open(opportunity, agent=agent)
 
-    def observe(self, quotes: list[Quote]):
-        by_venue={q.venue:q for q in quotes}
-        results=self.paper.observe(by_venue)
+    def observe(self, quotes):
+        """Mark open paper fills against the latest venue quotes."""
+        results = self.paper.observe(quotes)
+        for fill in results:
+            self.leaderboard.record(fill.agent, fill.realized_pnl)
         return results
 
-    def close(self, fill_id, quotes: list[Quote]):
-        by_venue={q.venue:q for q in quotes}
-        fill=self.paper.open_fills[fill_id]
-        buy=by_venue[fill.buy_venue]; sell=by_venue[fill.sell_venue]
-        closed=self.paper.close(fill_id,buy.ask,sell.bid)
-        self.leaderboard.record(closed.agent,closed.realized_pnl)
+    @staticmethod
+    def _price(quote, field: str) -> float:
+        if hasattr(quote, field):
+            return float(getattr(quote, field))
+        if isinstance(quote, dict):
+            return float(quote[field])
+        return float(quote)
+
+    @staticmethod
+    def _quote_for_venue(quotes, venue):
+        """Return a venue quote from either a mapping or a list of Quote objects."""
+        if isinstance(quotes, dict):
+            return quotes[venue]
+        for quote in quotes:
+            quote_venue = getattr(quote, "venue", None)
+            if quote_venue == venue:
+                return quote
+            if isinstance(quote, dict) and quote.get("venue") == venue:
+                return quote
+        raise KeyError(venue)
+
+    def close(self, fill_id, quotes):
+        """Close a paper fill using venue quotes and record its PnL.
+
+        ``quotes`` may be the venue mapping used by the runtime or a list of
+        Quote objects, which keeps this API compatible with existing callers.
+        """
+        fill = self.paper.open_fills.get(fill_id)
+        if fill is None:
+            return None
+
+        buy_quote = self._quote_for_venue(quotes, fill.buy_venue)
+        sell_quote = self._quote_for_venue(quotes, fill.sell_venue)
+        closed = self.paper.close(
+            fill_id,
+            self._price(buy_quote, "ask"),
+            self._price(sell_quote, "bid"),
+        )
+        self.leaderboard.record(closed.agent, closed.realized_pnl)
         return closed
 
     def snapshot(self):
-        return {"paper":self.paper.snapshot(),"leaderboard":self.leaderboard.snapshot(),"scanner":self.scanner.snapshot()}
+        scanner_gateway = getattr(self.scanner, "alert_gateway", None)
+        return {
+            "paper": self.paper.snapshot(),
+            "leaderboard": self.leaderboard.snapshot(),
+            "scanner": self.scanner.snapshot(),
+            "live_arbitrage": {"enabled": False, "status": "alert-only"},
+            "email_alerts": scanner_gateway.snapshot() if scanner_gateway else {"enabled": False},
+        }

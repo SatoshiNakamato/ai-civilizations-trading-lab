@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import smtplib
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from email.message import EmailMessage
 from time import time
 
@@ -17,6 +17,13 @@ class AlertCandidate:
     risk: float = 1.0
     sources: tuple[str, ...] = ()
     agent: str = "system"
+    token_address: str = ""
+    chain: str = ""
+    url: str = ""
+    buy_venue: str = ""
+    sell_venue: str = ""
+    buy_price: float = 0.0
+    sell_price: float = 0.0
 
     @property
     def severity(self) -> str:
@@ -30,7 +37,8 @@ class AlertCandidate:
 
 
 class EmailAlertGateway:
-    """Conservative, opt-in SMTP gateway for high-value civilization alerts."""
+    """SMTP gateway for high-value civilization alerts."""
+
     def __init__(self, recipient: str | None = None):
         self.recipient = recipient or os.getenv("CIVILIZATION_ALERT_EMAIL", "iNeed2p@wearehackerone.com")
         self.smtp_host = os.getenv("CIVILIZATION_SMTP_HOST", "")
@@ -53,7 +61,7 @@ class EmailAlertGateway:
             return False
         if candidate.confidence < self.min_confidence:
             return False
-        if candidate.category == "arbitrage" and candidate.edge < self.min_edge:
+        if candidate.category in {"arbitrage", "alpha-token"} and candidate.edge < self.min_edge:
             return False
         key = f"{candidate.category}:{candidate.title.strip().lower()}"
         if time() - self.last_sent.get(key, 0) < self.cooldown_seconds:
@@ -62,14 +70,21 @@ class EmailAlertGateway:
         return True
 
     def send(self, candidate: AlertCandidate) -> bool:
-        if not self.should_alert(candidate):
-            return False
-        if not self.enabled():
+        if not self.should_alert(candidate) or not self.enabled():
             return False
         msg = EmailMessage()
         msg["Subject"] = f"[{candidate.severity}] Civilization alert: {candidate.title}"
         msg["From"] = self.from_address
         msg["To"] = self.recipient
+        details = []
+        if candidate.token_address:
+            details.append(f"Contract address: {candidate.token_address}")
+        if candidate.chain:
+            details.append(f"Chain: {candidate.chain}")
+        if candidate.url:
+            details.append(f"Link: {candidate.url}")
+        if candidate.buy_venue and candidate.sell_venue:
+            details.append(f"Route: buy {candidate.buy_venue} @ {candidate.buy_price:.8g}; sell {candidate.sell_venue} @ {candidate.sell_price:.8g}")
         msg.set_content(
             f"Category: {candidate.category}\n"
             f"Severity: {candidate.severity}\n"
@@ -77,9 +92,9 @@ class EmailAlertGateway:
             f"Estimated edge: {candidate.edge:.2%}\n"
             f"Risk score: {candidate.risk:.2f}\n"
             f"Agent: {candidate.agent}\n"
-            f"Sources: {', '.join(candidate.sources) or 'none'}\n\n"
-            f"{candidate.summary}\n\n"
-            "This is a research alert, not an instruction to execute a trade."
+            f"Sources: {', '.join(candidate.sources) or 'none'}\n"
+            + ("\n".join(details) + "\n" if details else "")
+            + f"\n{candidate.summary}\n"
         )
         with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as smtp:
             smtp.starttls()

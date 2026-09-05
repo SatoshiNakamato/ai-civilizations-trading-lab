@@ -21,7 +21,7 @@ class Opportunity:
     risk_adjusted: float
 
 class AutonomousResearchEngine:
-    """Keyless resilient research loop using public observations when available."""
+    """Run a full civilization research pass, then return the strongest candidates."""
     WATCHLIST = ("BTC", "ETH", "SOL", "DOGE", "PEPE", "BASE", "ARB", "OP")
     THESIS_TEMPLATES = (
         "momentum/relative-strength anomaly",
@@ -35,8 +35,12 @@ class AutonomousResearchEngine:
     def cycle(self, agents, cycle, *, limit=8):
         if not agents: return []
         self.last_market = self.feed.fetch(); market = {x.asset: x for x in self.last_market}
-        preferred = [a for a in ("A001", "A002", "A003", "A004") if a in agents]
-        ordered = (preferred + [a for a in agents if a not in preferred])[:limit]
+        # Every configured civilization gets a research/debate pass. `limit`
+        # controls how many survivors are handed to execution/risk stages, not
+        # how many agents participate in research.
+        ordered = list(agents)
+        preferred = [a for a in ("A001", "A002", "A003", "A004") if a in ordered]
+        ordered = preferred + [a for a in ordered if a not in preferred]
         candidates = []
         for i, agent in enumerate(ordered):
             ticker = self.WATCHLIST[(cycle * 3 + i) % len(self.WATCHLIST)]
@@ -50,8 +54,16 @@ class AutonomousResearchEngine:
             d = self._debate(h, digest); ev = min(1.0, h.evidence * .7 + d.survival_score * .3)
             rank = h.score * .55 + ev * .30 + d.survival_score * .15
             candidates.append(Opportunity(h, d, ev, rank, rank * (1 - h.risk)))
-        candidates.sort(key=lambda x: x.risk_adjusted, reverse=True); self.history.extend(candidates[:3]); self.history = self.history[-50:]
-        return candidates
+        candidates.sort(key=lambda x: x.risk_adjusted, reverse=True)
+        # Keep the executor cohort represented in the handoff whenever the
+        # requested survivor budget permits it. Ranking still determines the
+        # remaining slots, so coverage does not replace ranking quality.
+        preferred_ids = {a for a in ("A001", "A002", "A003", "A004") if a in agents}
+        covered = [x for x in candidates if x.hypothesis.agent in preferred_ids][:limit]
+        covered_ids = {x.hypothesis.agent for x in covered}
+        survivors = covered + [x for x in candidates if x.hypothesis.agent not in covered_ids][:max(0, limit - len(covered))]
+        self.history.extend(survivors); self.history = self.history[-100:]
+        return survivors
     def _debate(self, h, digest):
         supporters, challengers = 3 + digest[4] % 7, 2 + digest[5] % 8
         objections = ("liquidity may be insufficient", "signal may be regime-dependent", "catalyst timing is uncertain")

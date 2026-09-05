@@ -19,5 +19,5 @@ def test_hosted_cycle_has_real_stages_and_bankr_plan(tmp_path):
     assert stages["debate"]["count"] > 0
     assert stages["evidence"]["count"] > 0
     assert "bankr_plans" in result
-    assert result["bankr_plans"]
-    assert result["bankr_plans"][0]["status"] == "simulated"
+    assert result["bankr_plans"] == []
+    assert stages["bankr"]["status"] == "disabled"
