@@ -87,6 +87,7 @@ class MultiExchangeArbitrageScanner:
         timeout_ms: int = 8_000,
         refresh_seconds: float = 20.0,
         ticker_batch_size: int = 100,
+        notional_usd: float | None = None,
     ):
         self.engine = engine or OpportunityEngine()
         self.alert_gateway = alert_gateway
@@ -108,7 +109,12 @@ class MultiExchangeArbitrageScanner:
         self.refresh_seconds = float(refresh_seconds)
         self.ticker_batch_size = max(1, int(ticker_batch_size))
         self.orderbook_limit = max(5, int(os.getenv("CIVILIZATION_ARBITRAGE_ORDERBOOK_LIMIT", "25")))
-        self.notional_usd = max(1.0, float(os.getenv("CIVILIZATION_ARBITRAGE_NOTIONAL_USD", "100")))
+        configured_notional = (
+            notional_usd
+            if notional_usd is not None
+            else os.getenv("CIVILIZATION_ARBITRAGE_NOTIONAL_USD", "100")
+        )
+        self.notional_usd = max(1.0, float(configured_notional))
         self.max_quote_age_seconds = max(1.0, float(os.getenv("CIVILIZATION_ARBITRAGE_MAX_QUOTE_AGE_SECONDS", "10")))
         self._clients: dict[str, Any] = {}
         self._markets: dict[str, set[str]] = {}
