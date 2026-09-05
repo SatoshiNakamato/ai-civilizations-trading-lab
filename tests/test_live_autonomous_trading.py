@@ -67,10 +67,12 @@ def test_email_alert_contains_token_metadata(monkeypatch):
     monkeypatch.setenv("AEON_NOTIFICATION_DEDUP_ENABLED", "true")
     monkeypatch.setenv("AEON_NOTIFICATION_DEDUP_WINDOW_SECONDS", "3600")
     monkeypatch.setenv("CIVILIZATION_SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("CIVILIZATION_SMTP_PORT", "587")
     monkeypatch.setenv("CIVILIZATION_SMTP_USER", "user")
     monkeypatch.setenv("CIVILIZATION_SMTP_PASSWORD", "secret")
     monkeypatch.setenv("CIVILIZATION_ALERT_FROM", "alerts@example.com")
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSMTP)
     gateway = EmailAlertGateway(recipient="alerts@example.com")
     candidate = AlertCandidate(
         title="Alpha launched", category="alpha-token", summary="launch", confidence=.95,
