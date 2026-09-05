@@ -55,14 +55,31 @@ class ArbitrageRuntime:
             return float(quote[field])
         return float(quote)
 
+    @staticmethod
+    def _quote_for_venue(quotes, venue):
+        """Return a venue quote from either a mapping or a list of Quote objects."""
+        if isinstance(quotes, dict):
+            return quotes[venue]
+        for quote in quotes:
+            quote_venue = getattr(quote, "venue", None)
+            if quote_venue == venue:
+                return quote
+            if isinstance(quote, dict) and quote.get("venue") == venue:
+                return quote
+        raise KeyError(venue)
+
     def close(self, fill_id, quotes):
-        """Close a paper fill using venue quotes and record its PnL."""
+        """Close a paper fill using venue quotes and record its PnL.
+
+        ``quotes`` may be the venue mapping used by the runtime or a list of
+        Quote objects, which keeps this API compatible with existing callers.
+        """
         fill = self.paper.open_fills.get(fill_id)
         if fill is None:
             return None
 
-        buy_quote = quotes[fill.buy_venue]
-        sell_quote = quotes[fill.sell_venue]
+        buy_quote = self._quote_for_venue(quotes, fill.buy_venue)
+        sell_quote = self._quote_for_venue(quotes, fill.sell_venue)
         closed = self.paper.close(
             fill_id,
             self._price(buy_quote, "ask"),
