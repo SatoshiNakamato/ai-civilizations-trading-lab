@@ -106,6 +106,14 @@ class CivilizationArena:
         self.outcomes[outcome.forecast_id] = outcome
         return outcome
 
+    def record_prediction(self, civilization_id: str, market: str, probability: float, event: bool, *, agent_id: str = "arena", horizon: str = "default", created_at: float | None = None, observed_at: float | None = None, source: str = "arena") -> ForecastCommitment:
+        """Convenience boundary for recording a forecast and its known testable outcome."""
+        commitment = self.commit(civilization_id, agent_id, market, horizon, probability, created_at=created_at)
+        self.submit(commitment)
+        observed = commitment.created_at if observed_at is None else float(observed_at)
+        self.resolve(ForecastOutcome(commitment.forecast_id, bool(event), observed, source))
+        return commitment
+
     def _scores(self, civilization_id: str) -> list[tuple[float, bool]]:
         return [(self.commitments[fid].probability, self.outcomes[fid].event) for fid in self._by_civilization.get(civilization_id, []) if fid in self.outcomes]
 
