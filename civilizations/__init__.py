@@ -4,7 +4,7 @@ __all__ = [
     "Agent", "Civilization", "Idea", "CivilizationArena", "ArenaConfig",
     "ForecastCommitment", "ForecastOutcome", "CivilizationScore",
     "AgentCommunicationBus", "AgentMessage", "CommunicationConfig",
-    "EvolutionFrontier", "FrontierEvent",
+    "EvolutionFrontier", "FrontierEvent", "CollectiveEvolutionLoop", "EvolutionStage",
 ]
 
 
@@ -21,4 +21,7 @@ def __getattr__(name):
     if name in {"EvolutionFrontier", "FrontierEvent"}:
         from .evolution_frontier import EvolutionFrontier, FrontierEvent
         return {"EvolutionFrontier": EvolutionFrontier, "FrontierEvent": FrontierEvent}[name]
+    if name in {"CollectiveEvolutionLoop", "EvolutionStage"}:
+        from .collective_evolution import CollectiveEvolutionLoop, EvolutionStage
+        return {"CollectiveEvolutionLoop": CollectiveEvolutionLoop, "EvolutionStage": EvolutionStage}[name]
     raise AttributeError(name)
