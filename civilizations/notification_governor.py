@@ -39,15 +39,18 @@ class NotificationConfig:
         def number(name: str, default: float) -> float:
             try:
                 return max(0.0, float(os.getenv(name, str(default))))
-            except ValueError:
+            except (TypeError, ValueError):
                 return default
 
         def integer(name: str, default: int) -> int:
             try:
                 return max(0, int(os.getenv(name, str(default))))
-            except ValueError:
+            except (TypeError, ValueError):
                 return default
 
+        severity = os.getenv("AEON_NOTIFICATION_MIN_SEVERITY", "HIGH").strip().upper() or "HIGH"
+        if severity not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            severity = "HIGH"
         return cls(
             enabled=boolean("AEON_NOTIFICATION_ENABLED", True),
             email_enabled=boolean("AEON_NOTIFICATION_EMAIL_ENABLED", True),
@@ -58,17 +61,56 @@ class NotificationConfig:
             digest_interval_seconds=number("AEON_NOTIFICATION_DIGEST_INTERVAL_SECONDS", 900),
             max_per_cycle=integer("AEON_NOTIFICATION_MAX_PER_CYCLE", 1),
             max_per_day=integer("AEON_NOTIFICATION_MAX_PER_DAY", 20),
-            min_severity=os.getenv("AEON_NOTIFICATION_MIN_SEVERITY", "HIGH").strip().upper() or "HIGH",
+            min_severity=severity,
         )
+
+
+@dataclass(frozen=True)
+class Notification:
+    severity: str
+    subject: str
+    body: str
+    fingerprint: str
+
+
+class SMTPEmailSender:
+    """SMTP adapter using the Voroa CIVILIZATION_* environment variables."""
+
+    def __call__(self, notification: Notification) -> None:
+        host = os.getenv("CIVILIZATION_SMTP_HOST", "").strip()
+        user = os.getenv("CIVILIZATION_SMTP_USER", "").strip()
+        password = os.getenv("CIVILIZATION_SMTP_PASSWORD", "")
+        recipient = os.getenv("CIVILIZATION_ALERT_EMAIL", "").strip()
+        sender = os.getenv("CIVILIZATION_ALERT_FROM", "").strip() or user
+        if not host or not user or not password or not recipient or not sender:
+            raise RuntimeError("notification SMTP configuration is incomplete")
+        try:
+            port = int(os.getenv("CIVILIZATION_SMTP_PORT", "587"))
+        except (TypeError, ValueError):
+            raise RuntimeError("invalid notification SMTP port")
+
+        message = EmailMessage()
+        message["From"] = sender
+        message["To"] = recipient
+        message["Subject"] = notification.subject
+        message.set_content(notification.body)
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as smtp:
+                smtp.login(user, password)
+                smtp.send_message(message)
+            return
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            smtp.starttls()
+            smtp.login(user, password)
+            smtp.send_message(message)
 
 
 class NotificationGovernor:
     """Fail-closed notification boundary with durable quota/cooldown protection.
 
-    SMTP failures never escape into the civilization cycle. Provider quota
-    responses such as Gmail 550/5.4.5 are persisted as a circuit-open state
-    until the next local calendar day, preventing process restarts from creating
-    a hot retry loop.
+    ``sender`` is optional for backwards compatibility with earlier AEON
+    deployments. When supplied it becomes the delivery adapter; otherwise the
+    governor uses the canonical SMTP adapter from the Voroa environment.
     """
 
     _LEVELS = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
@@ -79,10 +121,12 @@ class NotificationGovernor:
         *,
         clock: Callable[[], float] = time.time,
         state_path: Path | None = None,
+        sender: Callable[[Notification], None] | None = None,
     ):
         self.config = config or NotificationConfig.from_env()
         self.clock = clock
         self.state_path = state_path or DEFAULT_STATE_PATH
+        self.sender = sender or SMTPEmailSender()
         self._lock = Lock()
         self._cycle_sent = 0
         self._day = self._today()
@@ -150,27 +194,13 @@ class NotificationGovernor:
     def fingerprint(subject: str, body: str) -> str:
         return hashlib.sha256(f"{subject}\n{body}".encode("utf-8")).hexdigest()
 
-    def _credentials(self) -> tuple[str, str, str, int] | None:
-        host = os.getenv("CIVILIZATION_SMTP_HOST")
-        user = os.getenv("CIVILIZATION_SMTP_USER")
-        password = os.getenv("CIVILIZATION_SMTP_PASSWORD")
-        recipient = os.getenv("CIVILIZATION_ALERT_EMAIL")
-        sender = os.getenv("CIVILIZATION_ALERT_FROM") or user
-        if not host or not user or not password or not recipient or not sender:
-            return None
-        try:
-            port = int(os.getenv("CIVILIZATION_SMTP_PORT", "587"))
-        except ValueError:
-            return None
-        return sender, recipient, host, port
-
-    @staticmethod
-    def _is_daily_quota_error(exc: smtplib.SMTPDataError) -> bool:
-        detail = exc.smtp_error
+    def _is_daily_quota_error(self, exc: BaseException) -> bool:
+        code = getattr(exc, "smtp_code", None)
+        detail = getattr(exc, "smtp_error", "")
         if isinstance(detail, bytes):
             detail = detail.decode("utf-8", errors="replace")
         text = str(detail).lower()
-        return exc.smtp_code in {421, 450, 451, 452, 550, 552, 554} and (
+        return code in {421, 450, 451, 452, 550, 552, 554} and (
             "5.4.5" in text
             or "daily user sending limit" in text
             or "sending limit" in text
@@ -204,8 +234,8 @@ class NotificationGovernor:
                 previous = self._seen.get(fingerprint)
                 if previous is not None and now - previous < self.config.dedup_window_seconds:
                     return False, "duplicate"
-        if self._credentials() is None:
-            return False, "credentials_unavailable"
+        if self.sender is None:
+            return False, "sender_unavailable"
         return True, "allowed"
 
     def notify(self, *, severity: str, subject: str, body: str) -> dict:
@@ -213,39 +243,34 @@ class NotificationGovernor:
         allowed, reason = self.allowed(severity, fingerprint=fingerprint)
         if not allowed:
             return {"sent": False, "reason": reason, "severity": severity.upper()}
-
-        credentials = self._credentials()
-        if credentials is None:
-            return {"sent": False, "reason": "credentials_unavailable", "severity": severity.upper()}
-        sender, recipient, host, port = credentials
-        message = EmailMessage()
-        message["From"] = sender
-        message["To"] = recipient
-        message["Subject"] = subject
-        message.set_content(body)
+        notification = Notification(severity.upper(), subject, body, fingerprint)
+        now = self.clock()
         try:
-            with smtplib.SMTP(host, port, timeout=15) as smtp:
-                smtp.starttls()
-                smtp.login(os.getenv("CIVILIZATION_SMTP_USER"), os.getenv("CIVILIZATION_SMTP_PASSWORD"))
-                smtp.send_message(message)
+            self.sender(notification)
         except smtplib.SMTPDataError as exc:
             with self._lock:
                 self._last_error = type(exc).__name__
-                self._circuit_until = self._next_day_timestamp() if self._is_daily_quota_error(exc) else self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._circuit_until = self._next_day_timestamp() if self._is_daily_quota_error(exc) else now + max(self.config.cooldown_seconds, 300.0)
                 self._save_state()
             return {"sent": False, "reason": "smtp_quota" if self._is_daily_quota_error(exc) else "smtp_error", "error": type(exc).__name__, "severity": severity.upper()}
         except smtplib.SMTPException as exc:
             with self._lock:
                 self._last_error = type(exc).__name__
-                self._circuit_until = self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._circuit_until = now + max(self.config.cooldown_seconds, 300.0)
                 self._save_state()
             return {"sent": False, "reason": "smtp_error", "error": type(exc).__name__, "severity": severity.upper()}
         except OSError as exc:
             with self._lock:
                 self._last_error = type(exc).__name__
-                self._circuit_until = self.clock() + max(self.config.cooldown_seconds, 300.0)
+                self._circuit_until = now + max(self.config.cooldown_seconds, 300.0)
                 self._save_state()
             return {"sent": False, "reason": "smtp_transport_error", "error": type(exc).__name__, "severity": severity.upper()}
+        except Exception as exc:
+            with self._lock:
+                self._last_error = type(exc).__name__
+                self._circuit_until = now + max(self.config.cooldown_seconds, 300.0)
+                self._save_state()
+            return {"sent": False, "reason": "delivery_degraded", "error": type(exc).__name__, "severity": severity.upper()}
 
         with self._lock:
             self._cycle_sent += 1
@@ -267,4 +292,4 @@ class NotificationGovernor:
             }
 
 
-__all__ = ["NotificationConfig", "NotificationGovernor"]
+__all__ = ["Notification", "NotificationConfig", "NotificationGovernor", "SMTPEmailSender"]
