@@ -38,11 +38,16 @@ class CommandCenter:
         with open(self.state_file,'a',encoding='utf-8') as f: f.write(json.dumps(cmd.__dict__)+'\n')
 
     def _summary(self, state):
-        life=state.get('life',{}); internet=state.get('internet',{}); return {
-            'tick':state.get('tick',0),'generation':state.get('generation',0),'beings':state.get('beings',state.get('agents',0)),
+        # AutonomousWorld exposes life metrics at the top level; older runtime
+        # snapshots nested them under `life`. Support both formats.
+        life=state.get('life') if isinstance(state.get('life'),dict) else state
+        internet=state.get('internet') if isinstance(state.get('internet'),dict) else {}
+        beings=state.get('beings',state.get('agents',life.get('beings',0)))
+        return {
+            'tick':state.get('tick',0),'generation':state.get('generation',0),'beings':beings,
             'ideas':state.get('ideas',0),'memories':life.get('memories',0),'relationships':life.get('relationships',0),
-            'reflections':life.get('reflections',0),'artifacts':internet.get('artifacts',0),'web_events':internet.get('events',0),
-            'paused':self.paused,'shutdown':self.shutdown}
+            'reflections':life.get('reflections',0),'artifacts':internet.get('artifacts',state.get('artifacts',0)),
+            'web_events':internet.get('events',state.get('web_events',0)),'paused':self.paused,'shutdown':self.shutdown}
 
     def issue(self, text):
         text=text.strip()
@@ -71,9 +76,6 @@ class CommandCenter:
                 result=self.runtime.world.browse(parts[1],parts[2]); result['content']=result['content'][:12000]; return {'ok':True,'observation':result}
             except Exception as exc: return {'ok':False,'error':str(exc)}
         return {'ok':False,'error':'commands: status | charter | speak <message> | tell <agent> <message> | run [n] | inspect <agent> | browse <agent> <https_url> | pause | resume | shutdown | exit'}
-
-    def status(self, compact=False):
-        state=self.runtime.civilization.snapshot(); life=self.runtime.life.snapshot(); internet=self.runtime.world.snapshot(); state.update({'paused':self.paused,'shutdown':self.shutdown,'creator':self.charter.creator_name,'charter_fingerprint':self.charter.fingerprint,'commands':len(self.history),'life':life,'internet':internet}); return state
 
 def main():
     parser=argparse.ArgumentParser(description='AEON Creator Command Center'); parser.add_argument('--once',help='execute one command and exit'); args=parser.parse_args(); center=CommandCenter()
