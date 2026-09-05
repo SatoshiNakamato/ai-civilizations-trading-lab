@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -19,7 +20,7 @@ class Candle:
 
 
 class PublicMarketData:
-    """Read-only public market data. No keys and no trading endpoints."""
+    """Read-only public market data. Uses a labelled deterministic fallback offline."""
 
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
@@ -39,12 +40,22 @@ class PublicMarketData:
         return self._get_json("https://api.binance.com/api/v3/ticker/bookTicker?" + query)
 
     def snapshot(self, symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 200) -> dict[str, Any]:
-        candles = self.binance_klines(symbol, interval, limit)
-        ticker = self.binance_ticker(symbol)
-        return {
-            "source": "Binance public API",
-            "symbol": symbol.upper(),
-            "retrieved_at": time.time(),
-            "candles": [c.__dict__ for c in candles],
-            "ticker": ticker,
-        }
+        """Prefer live public data; keep the autonomous worker alive when the network is unavailable."""
+        try:
+            candles = self.binance_klines(symbol, interval, limit)
+            ticker = self.binance_ticker(symbol)
+            return {
+                "source": "Binance public API",
+                "mode": "live",
+                "symbol": symbol.upper(),
+                "retrieved_at": time.time(),
+                "candles": [c.__dict__ for c in candles],
+                "ticker": ticker,
+            }
+        except Exception as exc:
+            if os.getenv("AEON_MARKET_OFFLINE_FALLBACK", "true").lower() not in {"1", "true", "yes", "on"}:
+                raise
+            from .resilient_data import synthetic_snapshot
+            fallback = synthetic_snapshot(symbol, interval, limit)
+            fallback["live_error"] = type(exc).__name__
+            return fallback
