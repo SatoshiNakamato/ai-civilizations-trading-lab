@@ -22,9 +22,10 @@ class AutonomousWorld:
     def __init__(self,runtime,root='world_state',seed=42):
         self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5
         self.notifications=NotificationGovernor(SMTPEmailSender(), NotificationGovernorConfig.from_env())
-        self.collective=CollectiveLearning(AgentCommunicationBus(),seed=seed)
+        self.bus=AgentCommunicationBus()
+        self.collective=CollectiveLearning(self.bus,seed=seed)
         self.frontier=EvolutionFrontier()
-        self.collective_evolution=CollectiveEvolutionLoop(AgentCommunicationBus(),self.collective,self.frontier,self.platform)
+        self.collective_evolution=CollectiveEvolutionLoop(self.bus,self.collective,self.frontier,self.platform)
         for aid,agent in self.runtime.civilization.agents.items(): self.platform.register(aid,{'archetype':agent.archetype})
     def _evolve(self,aid):
         s=self.life.states[aid]; model=self.life.self_models[aid]; scores={'explore':s.curiosity,'build':s.achievement,'socialize':s.belonging,'protect':s.security,'reflect':.35}; individuality=float(model.get('individuality',.5)); scores={k:max(0.,v+self.rng.uniform(-.05,.05)*individuality) for k,v in scores.items()}; action=max(scores,key=scores.get); old=str(model.get('purpose','discover')); choices={'explore':['discover','understand','invent'],'build':['build','invent','compete'],'socialize':['connect','protect','build'],'reflect':['understand myself']}; purpose=self.rng.choice(choices[action]) if action in choices and scores[action]>.45 else old; model['purpose']=purpose; hist=model.setdefault('preferred_actions',[]); hist.append(action); model['preferred_actions']=hist[-20:]
