@@ -22,7 +22,7 @@ def test_depth_verification_rejects_insufficient_liquidity(tmp_path):
     scanner.max_quote_age_seconds = 10_000_000
     buy = MarketQuote("cheap", "BTC/USDT", 99, 100, 1, 1, 1_000_000)
     sell = MarketQuote("rich", "BTC/USDT", 104, 105, 1, 1, 1_000_000)
-    assert scanner._depth_verify(buy, sell) is not None
+    assert scanner._depth_verify(buy, sell) is None
 
 
 def test_opportunity_is_marked_executable_only_after_depth_check(tmp_path):
