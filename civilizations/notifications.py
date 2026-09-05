@@ -89,7 +89,9 @@ class SMTPEmailSender:
         self.port = port if port is not None else _int("CIVILIZATION_SMTP_PORT", 587, 1)
         self.user = user if user is not None else os.getenv("CIVILIZATION_SMTP_USER", "").strip()
         self.password = password if password is not None else os.getenv("CIVILIZATION_SMTP_PASSWORD", "")
-        self.sender = sender if sender is not None else os.getenv("CIVILIZATION_ALERT_FROM", "").strip()
+        # Use the authenticated Gmail account as the From address. This avoids
+        # relying on a separate alias/domain sender that may not be authorized.
+        self.sender = sender if sender is not None else self.user
         self.recipient = recipient if recipient is not None else os.getenv("CIVILIZATION_ALERT_EMAIL", "").strip()
 
     def __call__(self, notification: Notification) -> None:
