@@ -2,9 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from urllib.request import Request, urlopen
-import ipaddress, socket
+import ipaddress, socket, re
 
 @dataclass
 class WorldPolicy:
@@ -13,7 +13,7 @@ class WorldPolicy:
     timeout_seconds: int = 10
 
 class InternetWorld:
-    """Public-Internet senses plus persistent creation space for AEON beings."""
+    """Public Internet senses plus persistent creation space for AEON beings."""
     def __init__(self, root='world_artifacts', policy=None):
         self.root=Path(root).resolve(); self.root.mkdir(parents=True,exist_ok=True)
         self.policy=policy or WorldPolicy(); self.events=[]
@@ -31,14 +31,30 @@ class InternetWorld:
 
     def browse(self,agent_id,url):
         if not self._allowed(url): raise PermissionError('World policy rejected non-public HTTPS target')
-        req=Request(url,headers={'User-Agent':'AEON-world/1.0'})
+        req=Request(url,headers={'User-Agent':'AEON-world/1.1'})
         with urlopen(req,timeout=self.policy.timeout_seconds) as response:
             data=response.read(self.policy.max_bytes+1)
             if len(data)>self.policy.max_bytes: raise ValueError('Response exceeds world byte limit')
             content_type=response.headers.get('Content-Type',''); final_url=response.geturl()
         event={'type':'web_observation','agent':agent_id,'url':url,'final_url':final_url,'content_type':content_type,'bytes':len(data),'time':time()}
-        self.events.append(event); self.events=self.events[-500:]
+        self.events.append(event); self.events=self.events[-300:]
         return {**event,'content':data.decode('utf-8',errors='replace')}
+
+    def search(self,agent_id,query):
+        """Search the public web and return compact results for an autonomous research turn."""
+        query=' '.join(str(query).split())[:240]
+        if not query: return {'query':'','results':[]}
+        url='https://html.duckduckgo.com/html/?q='+quote_plus(query)
+        page=self.browse(agent_id,url)
+        html=page['content']
+        results=[]
+        for match in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',html,re.I|re.S):
+            href=re.sub(r'&amp;','&',match.group(1)); title=re.sub(r'<[^>]+>','',match.group(2)); title=re.sub(r'\s+',' ',title).strip()
+            if href.startswith('https://'):
+                results.append({'title':title[:300],'url':href[:1000]})
+            if len(results)>=5: break
+        self.events.append({'type':'web_search','agent':agent_id,'query':query,'results':len(results),'time':time()}); self.events=self.events[-300:]
+        return {'query':query,'results':results}
 
     def create_artifact(self,agent_id,relative_path,content):
         target=(self.root/relative_path).resolve()
@@ -47,8 +63,8 @@ class InternetWorld:
         if len(data)>self.policy.max_bytes: raise ValueError('Artifact exceeds world byte limit')
         target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(data)
         self.events.append({'type':'artifact_created','agent':agent_id,'path':str(target.relative_to(self.root)),'bytes':len(data),'time':time()})
-        self.events=self.events[-500:]
+        self.events=self.events[-300:]
         return str(target.relative_to(self.root))
 
     def snapshot(self):
-        return {'artifacts':sum(1 for p in self.root.rglob('*') if p.is_file()),'events':len(self.events),'internet':'public_https'}
+        return {'artifacts':sum(1 for p in self.root.rglob('*') if p.is_file()),'events':len(self.events),'internet':'public_https','search':'duckduckgo_html'}
