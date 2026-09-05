@@ -146,7 +146,7 @@ class OpportunityEngine:
     ) -> str | None:
         if opportunity.status != "validated":
             return None
-        if opportunity.category == "arbitrage" and (opportunity.net_edge < 0.005 or not opportunity.executable):
+        if opportunity.category == "arbitrage" and opportunity.net_edge < 0.005:
             return None
         if opportunity.score >= critical_score:
             self.stats["alerts"] += 1
