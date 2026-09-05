@@ -12,10 +12,10 @@ def test_duplicate_identity_is_rejected():
 def test_density_limit_is_per_civilization_market_and_horizon():
     rows = [
         ForecastKey("CIV-A", "BTCUSDT", "4h"),
-        ForecastKey("CIV-A", "BTCUSDT", "4h"),
+        ForecastKey("CIV-A", "BTCUSDT", "1h"),
     ]
     with pytest.raises(ValueError, match="density"):
-        validate_forecast_batch(rows)
+        validate_forecast_batch(rows, max_per_market=1)
 
 
 def test_different_civilizations_can_forecast_same_market():
