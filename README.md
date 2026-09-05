@@ -1,6 +1,6 @@
 # AEON — Artificial Evolutionary Organizational Network
 
-**Release: v0.2.0**
+**Release: v0.3.0**
 
 A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
@@ -20,6 +20,16 @@ The core loop is:
 **Observe → Research → Hypothesize → Validate → Debate → Share → Adopt → Mutate → Organize → Evolve**
 
 The civilization is not scripted to choose a winning strategy. The simulation supplies rules, resources and feedback; strategies and organizations emerge from repeated interaction.
+
+## Civilization Arena
+
+AEON includes an objective Civilization Arena for evaluating evolving civilizations against independently supplied outcomes rather than allowing the simulation to grade itself.
+
+The Arena records immutable forecast commitments, accepts externally sourced outcomes, calculates deterministic probabilistic scores and ranks civilizations only when enough resolved observations exist. This creates an explicit selection pressure for accuracy, calibration and reproducibility instead of rewarding unsupported claims of profitability.
+
+The Arena is provider-agnostic so external outcome evaluators can be connected without coupling the civilization engine to a single service. Forecasts are committed before resolution, and resolved outcomes cannot be silently replaced.
+
+The Arena is intended to evolve toward civilization-versus-civilization evaluation, hidden/out-of-sample evaluation and evolutionary selection based on externally verifiable results.
 
 ## Civilization systems
 
@@ -53,6 +63,7 @@ These are simulation mechanisms, not a claim of literal consciousness or sentien
 - **100 agents** across quant, arbitrage, macro, momentum, value, contrarian, risk, probability, microstructure and exploration roles.
 - **Strategy memes** — bounded information objects that can be adopted, challenged and mutated inside the simulation.
 - **Evidence loop** — hypotheses remain subject to real-data validation and out-of-sample checks.
+- **Civilization Arena** — forecasts can be committed and evaluated against externally supplied outcomes with deterministic scoring and lineage-safe rankings.
 - **Trading intelligence** — arbitrage, research, prediction-market and risk modules remain available as civilization capabilities.
 - **Public-web research** — agents can consume bounded public HTTPS research inputs without unrestricted host access.
 - **Bounded creation** — generated artifacts stay inside the civilization's world boundary.
@@ -83,13 +94,13 @@ The worker uses a PID guard to avoid accidental duplicate runtimes and writes di
 
 ## Architecture
 
-- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics and endurance controls
+- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics, endurance controls and Arena evaluation
 - `markets/` — normalized market data, arbitrage, prediction-market research and paper infrastructure
 - `simulation/` — continuous civilization workers
 - `backtesting/` — deterministic validation
 - `risk/` — exposure and safety gates
 - `web/` — local AEON console/API
-- `tests/` — automated regression, system-integration and endurance tests
+- `tests/` — automated regression, system-integration, Arena and endurance tests
 
 ## Endurance and constrained environments
 
