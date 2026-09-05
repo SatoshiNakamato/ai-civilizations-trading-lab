@@ -1,0 +1,177 @@
+"""Objective evaluation for evolving civilizations.
+
+The arena is deliberately provider-agnostic. It never invents outcomes: a forecast is
+committed before its evaluation window closes and can only be scored once an external
+outcome has been supplied by a trusted outcome provider.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from hashlib import sha256
+from math import log
+from time import time
+from typing import Iterable
+
+
+@dataclass(frozen=True)
+class ForecastCommitment:
+    forecast_id: str
+    civilization_id: str
+    agent_id: str
+    market: str
+    horizon: str
+    probability: float
+    created_at: float
+    commitment: str
+    resolved: bool = False
+
+
+@dataclass(frozen=True)
+class ForecastOutcome:
+    forecast_id: str
+    event: bool
+    observed_at: float
+    source: str
+
+
+@dataclass
+class CivilizationScore:
+    civilization_id: str
+    forecasts: int = 0
+    resolved: int = 0
+    brier_score: float | None = None
+    calibration_error: float | None = None
+    resolution_rate: float = 0.0
+    fitness: float = 0.0
+    sample_sufficient: bool = False
+
+
+@dataclass
+class ArenaConfig:
+    min_resolved: int = 20
+    max_abs_probability: float = 1.0
+    log_loss_floor: float = 1e-6
+
+
+class CivilizationArena:
+    """A real evaluation ledger for civilization-level selection.
+
+    Predictions are immutable commitments. Outcomes are supplied separately, so the
+    arena cannot silently replace a forecast after the result is known. The scoring
+    functions are deterministic and contain no market-return or profitability claim.
+    """
+
+    def __init__(self, config: ArenaConfig | None = None) -> None:
+        self.config = config or ArenaConfig()
+        self.commitments: dict[str, ForecastCommitment] = {}
+        self.outcomes: dict[str, ForecastOutcome] = {}
+        self._by_civilization: dict[str, list[str]] = {}
+
+    @staticmethod
+    def commit(
+        civilization_id: str,
+        agent_id: str,
+        market: str,
+        horizon: str,
+        probability: float,
+        *,
+        forecast_id: str | None = None,
+        created_at: float | None = None,
+    ) -> ForecastCommitment:
+        if not civilization_id or not agent_id or not market or not horizon:
+            raise ValueError("civilization_id, agent_id, market and horizon are required")
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError("probability must be between 0 and 1")
+        ts = time() if created_at is None else float(created_at)
+        fid = forecast_id or sha256(f"{civilization_id}:{agent_id}:{market}:{horizon}:{ts}".encode()).hexdigest()[:24]
+        payload = f"{fid}|{civilization_id}|{agent_id}|{market}|{horizon}|{probability:.12f}|{ts:.6f}"
+        digest = sha256(payload.encode()).hexdigest()
+        return ForecastCommitment(fid, civilization_id, agent_id, market, horizon, probability, ts, digest)
+
+    def submit(self, commitment: ForecastCommitment) -> ForecastCommitment:
+        if commitment.forecast_id in self.commitments:
+            existing = self.commitments[commitment.forecast_id]
+            if existing.commitment != commitment.commitment:
+                raise ValueError("forecast_id collision with different commitment")
+            return existing
+        self.commitments[commitment.forecast_id] = commitment
+        self._by_civilization.setdefault(commitment.civilization_id, []).append(commitment.forecast_id)
+        return commitment
+
+    def resolve(self, outcome: ForecastOutcome) -> ForecastOutcome:
+        commitment = self.commitments.get(outcome.forecast_id)
+        if commitment is None:
+            raise KeyError(f"unknown forecast: {outcome.forecast_id}")
+        if outcome.forecast_id in self.outcomes:
+            existing = self.outcomes[outcome.forecast_id]
+            if existing != outcome:
+                raise ValueError("forecast already resolved with a different outcome")
+            return existing
+        if outcome.observed_at < commitment.created_at:
+            raise ValueError("outcome timestamp cannot precede forecast commitment")
+        if not outcome.source.strip():
+            raise ValueError("an external outcome source is required")
+        self.outcomes[outcome.forecast_id] = outcome
+        return outcome
+
+    def _scores(self, civilization_id: str) -> list[tuple[float, bool]]:
+        rows = []
+        for fid in self._by_civilization.get(civilization_id, []):
+            c = self.commitments[fid]
+            o = self.outcomes.get(fid)
+            if o is not None:
+                rows.append((c.probability, o.event))
+        return rows
+
+    def score(self, civilization_id: str) -> CivilizationScore:
+        forecasts = len(self._by_civilization.get(civilization_id, []))
+        rows = self._scores(civilization_id)
+        resolved = len(rows)
+        if not rows:
+            return CivilizationScore(civilization_id, forecasts=forecasts)
+
+        brier = sum((p - float(event)) ** 2 for p, event in rows) / resolved
+        bins: dict[int, list[tuple[float, bool]]] = {}
+        for p, event in rows:
+            bins.setdefault(min(9, int(p * 10)), []).append((p, event))
+        calibration = sum(abs(sum(p for p, _ in bucket) / len(bucket) - sum(float(e) for _, e in bucket) / len(bucket)) for bucket in bins.values()) / len(bins)
+        # Convert lower-is-better metrics to a bounded fitness score.
+        brier_component = max(0.0, 1.0 - brier)
+        calibration_component = max(0.0, 1.0 - calibration)
+        resolution_rate = resolved / forecasts if forecasts else 0.0
+        fitness = 0.6 * brier_component + 0.3 * calibration_component + 0.1 * resolution_rate
+        return CivilizationScore(
+            civilization_id,
+            forecasts=forecasts,
+            resolved=resolved,
+            brier_score=brier,
+            calibration_error=calibration,
+            resolution_rate=resolution_rate,
+            fitness=fitness,
+            sample_sufficient=resolved >= self.config.min_resolved,
+        )
+
+    def leaderboard(self, civilization_ids: Iterable[str] | None = None) -> list[CivilizationScore]:
+        ids = list(civilization_ids) if civilization_ids is not None else list(self._by_civilization)
+        return sorted((self.score(cid) for cid in ids), key=lambda s: (s.sample_sufficient, s.fitness, s.resolved), reverse=True)
+
+    def snapshot(self) -> dict:
+        board = self.leaderboard()
+        return {
+            "commitments": len(self.commitments),
+            "resolved": len(self.outcomes),
+            "civilizations": len(self._by_civilization),
+            "leaderboard": [
+                {
+                    "rank": i + 1,
+                    "civilization_id": s.civilization_id,
+                    "forecasts": s.forecasts,
+                    "resolved": s.resolved,
+                    "brier_score": None if s.brier_score is None else round(s.brier_score, 6),
+                    "calibration_error": None if s.calibration_error is None else round(s.calibration_error, 6),
+                    "fitness": round(s.fitness, 6),
+                    "sample_sufficient": s.sample_sufficient,
+                }
+                for i, s in enumerate(board)
+            ],
+        }
