@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import smtplib
 from dataclasses import dataclass
-from email.message import EmailMessage
 from time import time
+
+from .notification_governor import NotificationGovernor
 
 
 @dataclass
@@ -37,24 +37,27 @@ class AlertCandidate:
 
 
 class EmailAlertGateway:
-    """SMTP gateway for high-value civilization alerts."""
+    """SMTP gateway for high-value civilization alerts.
 
-    def __init__(self, recipient: str | None = None):
+    Delivery is delegated to NotificationGovernor so SMTP provider failures,
+    especially Gmail quota responses, cannot crash or repeatedly restart the
+    civilization worker.
+    """
+
+    def __init__(self, recipient: str | None = None, governor: NotificationGovernor | None = None):
         self.recipient = recipient or os.getenv("CIVILIZATION_ALERT_EMAIL", "iNeed2p@wearehackerone.com")
-        self.smtp_host = os.getenv("CIVILIZATION_SMTP_HOST", "")
-        self.smtp_port = int(os.getenv("CIVILIZATION_SMTP_PORT", "587"))
-        self.smtp_user = os.getenv("CIVILIZATION_SMTP_USER", "")
-        self.smtp_password = os.getenv("CIVILIZATION_SMTP_PASSWORD", "")
-        self.from_address = os.getenv("CIVILIZATION_ALERT_FROM", self.smtp_user)
         self.min_confidence = float(os.getenv("CIVILIZATION_ALERT_MIN_CONFIDENCE", "0.80"))
         self.min_edge = float(os.getenv("CIVILIZATION_ALERT_MIN_EDGE", "0.005"))
         self.cooldown_seconds = int(os.getenv("CIVILIZATION_ALERT_COOLDOWN", "1800"))
         self.last_sent: dict[str, float] = {}
         self.sent = 0
         self.suppressed = 0
+        self.governor = governor or NotificationGovernor()
 
     def enabled(self) -> bool:
-        return bool(self.smtp_host and self.smtp_user and self.smtp_password and self.recipient)
+        # Governor owns the complete SMTP credential check. This method keeps
+        # the historical gateway API while avoiding secret values in snapshots.
+        return self.governor._credentials() is not None and self.governor.config.enabled and self.governor.config.email_enabled
 
     def should_alert(self, candidate: AlertCandidate) -> bool:
         if candidate.severity not in {"CRITICAL", "HIGH"}:
@@ -69,13 +72,9 @@ class EmailAlertGateway:
             return False
         return True
 
-    def send(self, candidate: AlertCandidate) -> bool:
-        if not self.should_alert(candidate) or not self.enabled():
-            return False
-        msg = EmailMessage()
-        msg["Subject"] = f"[{candidate.severity}] Civilization alert: {candidate.title}"
-        msg["From"] = self.from_address
-        msg["To"] = self.recipient
+    @staticmethod
+    def _message(candidate: AlertCandidate) -> tuple[str, str]:
+        subject = f"[{candidate.severity}] Civilization alert: {candidate.title}"
         details = []
         if candidate.token_address:
             details.append(f"Contract address: {candidate.token_address}")
@@ -85,7 +84,7 @@ class EmailAlertGateway:
             details.append(f"Link: {candidate.url}")
         if candidate.buy_venue and candidate.sell_venue:
             details.append(f"Route: buy {candidate.buy_venue} @ {candidate.buy_price:.8g}; sell {candidate.sell_venue} @ {candidate.sell_price:.8g}")
-        msg.set_content(
+        body = (
             f"Category: {candidate.category}\n"
             f"Severity: {candidate.severity}\n"
             f"Confidence: {candidate.confidence:.1%}\n"
@@ -96,14 +95,20 @@ class EmailAlertGateway:
             + ("\n".join(details) + "\n" if details else "")
             + f"\n{candidate.summary}\n"
         )
-        with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as smtp:
-            smtp.starttls()
-            smtp.login(self.smtp_user, self.smtp_password)
-            smtp.send_message(msg)
-        key = f"{candidate.category}:{candidate.title.strip().lower()}"
-        self.last_sent[key] = time()
-        self.sent += 1
-        return True
+        return subject, body
+
+    def send(self, candidate: AlertCandidate) -> bool:
+        if not self.should_alert(candidate):
+            return False
+        subject, body = self._message(candidate)
+        result = self.governor.notify(severity=candidate.severity, subject=subject, body=body)
+        if result.get("sent"):
+            key = f"{candidate.category}:{candidate.title.strip().lower()}"
+            self.last_sent[key] = time()
+            self.sent += 1
+            return True
+        self.suppressed += 1
+        return False
 
     def snapshot(self):
         return {
@@ -113,4 +118,5 @@ class EmailAlertGateway:
             "suppressed": self.suppressed,
             "min_confidence": self.min_confidence,
             "min_edge": self.min_edge,
+            "governor": self.governor.snapshot(),
         }
