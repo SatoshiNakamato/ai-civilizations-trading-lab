@@ -1,6 +1,6 @@
 # AEON — Artificial Evolutionary Organizational Network
 
-**Release: v0.4.0**
+**Release: v0.5.0**
 
 A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
@@ -11,21 +11,24 @@ A research-first simulation where 100 specialized AI market intelligences become
 
 **Project enquiries:** iNeed2p@wearehackerone.com
 
-## Unreleased — next release candidate
+## V0.5.0 — Collective Evolution Release
 
-The current `main` branch contains the next notification-governance and CI work. **It is not released or tagged yet.** A release tag will only be created after explicit release confirmation.
+V0.5.0 connects the existing civilization primitives into a governed collective evolution system. The 100-agent population can now research, communicate, exchange ideas, challenge hypotheses, learn collectively, preserve durable memories, evaluate strategies and generate governed proposals for future improvement.
 
-Planned release work includes:
+The release is intentionally autonomous **inside explicit boundaries**: agents can create and retain world-scoped artifacts and memories, but they do not receive unrestricted host, GitHub, source-code, trading or deployment authority.
 
-- **Notification Governor** — critical/high/info alerts are fingerprinted, deduplicated and rate-limited before delivery.
-- **Durable notification state** — send counts, dedupe fingerprints and SMTP circuit state survive worker restarts.
-- **SMTP quota protection** — provider throttling such as Gmail `550 5.4.5` opens a persistent circuit until the next local day instead of producing repeated hot-loop failures.
-- **Provider isolation** — notification delivery remains behind a small boundary so SMTP/provider failures cannot crash the civilization worker.
-- **Deterministic fingerprints** — identical alert content produces the same stable fingerprint across runs.
-- **Hermetic CI** — tests do not depend on Binance public API availability; market-dependent tests use deterministic fixtures.
-- **Reproducible test environment** — CI fixes the runner image, Python patch version, locale/timezone, hash seed and pytest version.
+### What is new in V0.5.0
 
-This work separates two concerns that previously collided in production: **finding opportunities** and **deciding whether the operator should be interrupted about them**.
+- **100-agent collective learning** — agents participate in recurring research and learning cycles rather than operating as isolated workers.
+- **Inter-agent communication bus** — agents can publish findings, hypotheses, objections and memory references, broadcast bounded ideas, read inboxes and inspect bounded conversations.
+- **Research exchange and debate** — observations move between agents and enter collective synthesis, hypothesis generation, adversarial debate and evidence verification.
+- **Durable agent memory** — agents can create governed memory files and nested folders inside their world-scoped workspace so later cycles and generations can look back at prior evidence and discoveries.
+- **Strategy preservation** — strategy ideas, experiments, outcomes, feedback and genealogy are recorded as durable frontier artifacts for replay and future learning.
+- **Fifteen-stage collective evolution loop** — observe, lane assignment, independent research, peer exchange, synthesis, hypothesis generation, adversarial debate, evidence verification, confidence calibration, adoption, bounded experiments, outcome evaluation, strategy feedback, genealogy and governed mutation proposals.
+- **Evolution frontier** — strong collective results can become explicit source-change proposals rather than silently modifying project code.
+- **Collective evolution telemetry** — durable world snapshots expose communication, learning, frontier, constitution, diagnostics and replay state for operator inspection.
+- **Governed GitHub persistence** — optional persistence can publish approved memory/proposal/document artifacts to a dedicated non-main evolution branch; agents do not independently push to `main`.
+- **Safety-preserving autonomy** — execution remains disabled by default, external credentials stay outside agent state, and all governed capabilities enforce namespaces, quotas and audit records.
 
 ## Civilization Arena
 
@@ -65,6 +68,8 @@ These are simulation mechanisms, not a claim of literal consciousness or sentien
 ## Research and trading intelligence
 
 - **100 agents** across quant, arbitrage, macro, momentum, value, contrarian, risk, probability, microstructure and exploration roles.
+- **Agent communication** — governed messages allow agents to exchange research findings, hypotheses, objections and memory references.
+- **Collective learning** — agents compare evidence, debate claims, calibrate confidence and adopt bounded strategy improvements.
 - **Strategy memes** — bounded information objects that can be adopted, challenged and mutated inside the simulation.
 - **Evidence loop** — hypotheses remain subject to real-data validation and out-of-sample checks.
 - **Civilization Arena** — forecasts can be committed and evaluated against externally supplied outcomes with deterministic scoring and lineage-safe rankings.
@@ -73,6 +78,30 @@ These are simulation mechanisms, not a claim of literal consciousness or sentien
 - **Alert governance** — high-value findings can pass through a notification governor before external delivery.
 - **Bounded creation** — generated artifacts stay inside the civilization's world boundary.
 - **Alert-only live boundary** — live execution remains disabled by default and is not required to run the civilization.
+
+## Governed autonomous evolution
+
+AEON has a dedicated **Evolution Governor** for agent autonomy: agents can create persistent memory, research artifacts and evolution proposals without receiving unrestricted host or repository control.
+
+The boundary has three layers:
+
+1. **Agent workspace** — agents may create files and nested folders only inside governed namespaces such as `world_artifacts/agent_memory/<agent>/`.
+2. **Governor** — every write is checked for path traversal, symlinks, per-file bytes, total storage and file-count quotas and is recorded in an append-only audit log.
+3. **Promotion boundary** — source-code changes are proposals, not direct source writes. An optional GitHub publisher can persist governed artifacts to a dedicated `aeon/agent-memory-*` branch; it cannot publish to `main` and it rejects source namespaces.
+
+This creates a useful form of machine evolution: the civilization can accumulate its own memory, preserve discoveries, form hypotheses about how it should improve and leave durable artifacts for later generations. The project remains human-reviewable because source mutation and production execution stay outside the agent's authority.
+
+### Optional GitHub persistence
+
+Set these only in the hosted worker environment, never inside repository files:
+
+- `AEON_GITHUB_TOKEN` — a GitHub fine-grained token with the minimum repository Contents permission needed for the dedicated branch workflow.
+- `AEON_GITHUB_REPO` — defaults to `SatoshiNakamato/ai-civilizations-trading-lab`.
+- `AEON_GITHUB_BASE_BRANCH` — defaults to `main`.
+
+The runtime should publish a batch after a cycle rather than letting 100 agents independently push. This gives the governor one auditable promotion point and avoids branch/commit storms.
+
+**Important:** do not give an agent a token that can administer the repository, manage secrets, alter workflows or bypass branch protection. The autonomy model is intentionally powerful inside its workspace and deliberately weak at the project-control boundary.
 
 ## Notification governance
 
@@ -98,7 +127,7 @@ python -m pip install -r requirements.txt
 python -m uvicorn web.app:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000` in a browser. Use the web controls to advance the civilization and observe organizations, strategy memes, research and events emerge.
+Open `http://127.0.0.1:8000` in a browser. Use the web controls to advance the civilization and observe organizations, strategy memes, research, communication and collective evolution emerge.
 
 For a lightweight local simulation run:
 
@@ -114,13 +143,14 @@ The worker uses a PID guard to avoid accidental duplicate runtimes and writes di
 
 ## Architecture
 
-- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics, endurance controls, Arena evaluation and notification governance
+- `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics, collective learning, communication, frontier evolution, endurance controls, Arena evaluation and notification governance
 - `markets/` — normalized market data, arbitrage, prediction-market research and paper infrastructure
 - `simulation/` — continuous civilization workers
 - `backtesting/` — deterministic validation
 - `risk/` — exposure and safety gates
+- `execution/` — guarded order submission boundary
 - `web/` — local AEON console/API
-- `tests/` — automated regression, system-integration, Arena, endurance and notification-governance tests
+- `tests/` — automated regression, system-integration, collective-learning, frontier and notification-governance tests
 - `.github/workflows/` — deterministic, hermetic CI
 
 ## Endurance and constrained environments

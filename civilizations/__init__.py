@@ -1,6 +1,11 @@
 """AI civilization package."""
 
-__all__ = ["Agent", "Civilization", "Idea", "CivilizationArena", "ArenaConfig", "ForecastCommitment", "ForecastOutcome", "CivilizationScore"]
+__all__ = [
+    "Agent", "Civilization", "Idea", "CivilizationArena", "ArenaConfig",
+    "ForecastCommitment", "ForecastOutcome", "CivilizationScore",
+    "AgentCommunicationBus", "AgentMessage", "CommunicationConfig",
+    "EvolutionFrontier", "FrontierEvent", "CollectiveEvolutionLoop", "EvolutionStage",
+]
 
 
 def __getattr__(name):
@@ -10,4 +15,13 @@ def __getattr__(name):
     if name in {"CivilizationArena", "ArenaConfig", "ForecastCommitment", "ForecastOutcome", "CivilizationScore"}:
         from .arena import ArenaConfig, CivilizationArena, CivilizationScore, ForecastCommitment, ForecastOutcome
         return {"CivilizationArena": CivilizationArena, "ArenaConfig": ArenaConfig, "ForecastCommitment": ForecastCommitment, "ForecastOutcome": ForecastOutcome}[name]
+    if name in {"AgentCommunicationBus", "AgentMessage", "CommunicationConfig"}:
+        from .agent_communication import AgentCommunicationBus, AgentMessage, CommunicationConfig
+        return {"AgentCommunicationBus": AgentCommunicationBus, "AgentMessage": AgentMessage, "CommunicationConfig": CommunicationConfig}[name]
+    if name in {"EvolutionFrontier", "FrontierEvent"}:
+        from .evolution_frontier import EvolutionFrontier, FrontierEvent
+        return {"EvolutionFrontier": EvolutionFrontier, "FrontierEvent": FrontierEvent}[name]
+    if name in {"CollectiveEvolutionLoop", "EvolutionStage"}:
+        from .collective_evolution import CollectiveEvolutionLoop, EvolutionStage
+        return {"CollectiveEvolutionLoop": CollectiveEvolutionLoop, "EvolutionStage": EvolutionStage}[name]
     raise AttributeError(name)

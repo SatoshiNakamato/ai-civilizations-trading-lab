@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.0] - 2026-09-05
+### V5 frontier hardening
+- Integrated a governed fifteen-stage collective evolution loop into the autonomous world tick.
+- The loop now exposes observe, lane assignment, independent research, peer exchange, synthesis, hypothesis generation, adversarial debate, evidence verification, confidence calibration, adoption, bounded experiments, outcome evaluation, strategy feedback, genealogy, and governed mutation proposal stages.
+- Reused the existing communication bus, collective-learning layer and evolution frontier instead of introducing duplicate systems.
+- Integrated collective evolution telemetry into the durable world snapshot for operator inspection.
+- Integrated collective communication and learning into the 100-agent autonomous world cycle.
+- Added governed frontier evolution records for research memory, experiments, genealogy and replay.
+- Added constitution and self-diagnosis state to the frontier command snapshot.
+- Added governed mutation proposals; agents can propose source changes but cannot write source code directly.
+- Added explicit documentation for the frontier evolution loop and safety boundary.
+- Kept GitHub persistence optional and restricted to governed artifact namespaces/non-main evolution branches.
+
 ## [0.4.0] - 2026-09-05
 ### Release candidate hardening
 - Added durable civilization state snapshots with safe atomic persistence.

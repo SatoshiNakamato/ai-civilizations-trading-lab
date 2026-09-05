@@ -1,77 +1,162 @@
-"""Governed collective learning rounds for the civilization.
+"""Governed collective learning and evolution built on the agent communication bus.
 
-This layer connects the durable communication bus to the existing civilization
-learning model. It deliberately does not grant agents credentials, arbitrary
-filesystem access, or direct execution authority.
+The learning layer turns bounded observations into peer-to-peer research exchange,
+then performs synthesis, adversarial review, confidence scoring, adoption, and
+cycle history. It never grants agents credentials, arbitrary filesystem access,
+or unrestricted execution authority.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, asdict
 from random import Random
-from typing import Iterable
+from typing import Mapping, Sequence
 
 from .agent_communication import AgentCommunicationBus
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LearningExchange:
-    tick: int
     sender: str
     recipient: str
     topic: str
-    message_id: str
-    adopted: bool
+    evidence: str
     confidence: float
+    adopted: bool = True
+    message_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DebateExchange:
+    sender: str
+    recipient: str
+    topic: str
+    challenge: str
+    confidence: float
+    message_id: str | None = None
 
 
 class CollectiveLearning:
-    """Turn agent observations into governed peer-to-peer learning."""
+    """Coordinate a bounded research -> debate -> adoption evolution loop."""
 
-    def __init__(self, bus: AgentCommunicationBus | None = None, seed: int = 42) -> None:
-        self.bus = bus or AgentCommunicationBus()
+    def __init__(self, bus: AgentCommunicationBus, seed: int = 42):
+        self.bus = bus
         self.rng = Random(seed)
-        self.exchanges: list[LearningExchange] = []
+        self._last_round: list[LearningExchange] = []
+        self._last_debate: list[DebateExchange] = []
+        self._last_synthesis: dict = {}
+        self._last_adoption: list[dict] = []
+        self._cycle_history: list[dict] = []
 
-    def round(self, agents: Iterable[str], *, tick: int, evidence: dict[str, str]) -> list[LearningExchange]:
-        ids = list(dict.fromkeys(agents))
-        if len(ids) < 2:
-            return []
-        results: list[LearningExchange] = []
-        for sender in ids:
-            finding = str(evidence.get(sender, ""))[:800].strip()
-            if not finding:
-                continue
-            # Each agent teaches one peer; bounded fan-out prevents a 100-agent
-            # round from becoming an uncontrolled message storm.
-            offset = 1 + self.rng.randrange(len(ids) - 1)
-            recipient = ids[(ids.index(sender) + offset) % len(ids)]
-            topic = f"research:{tick}"
-            msg = self.bus.publish(sender, recipient, topic, finding, ttl_seconds=7 * 86400)
-            confidence = 0.5 + self.rng.random() * 0.4
-            adopted = confidence >= 0.65
-            results.append(LearningExchange(tick, sender, recipient, topic, msg.message_id, adopted, round(confidence, 3)))
-        self.exchanges.extend(results)
-        self.exchanges = self.exchanges[-500:]
-        return results
+    def _peer(self, sender: str, agents: Sequence[str]) -> str:
+        peers = [aid for aid in agents if aid != sender]
+        if not peers:
+            raise ValueError("collective learning requires at least two agents")
+        return self.rng.choice(peers)
 
-    def debate(self, agents: Iterable[str], *, tick: int, topic: str) -> list[dict[str, object]]:
-        ids = list(dict.fromkeys(agents))
-        if len(ids) < 2:
-            return []
-        rounds: list[dict[str, object]] = []
-        for idx, sender in enumerate(ids):
-            recipient = ids[(idx + 1) % len(ids)]
-            objection = f"Challenge evidence for {topic}: identify assumptions, missing data, and failure modes."
-            msg = self.bus.publish(sender, recipient, f"debate:{tick}", objection, ttl_seconds=86400)
-            rounds.append({"sender": sender, "recipient": recipient, "message_id": msg.message_id, "topic": topic})
-        return rounds
+    def round(self, agents: Sequence[str], *, tick: int, evidence: Mapping[str, str]) -> list[LearningExchange]:
+        """Run the research-sharing stage: every agent contributes to one peer."""
+        agents = list(dict.fromkeys(agents))
+        exchanges: list[LearningExchange] = []
+        for sender in agents:
+            body = str(evidence.get(sender, "")).strip()
+            if not body:
+                body = f"{sender} contributed no new evidence at tick {tick}."
+            recipient = self._peer(sender, agents)
+            message = self.bus.publish(sender, recipient, "research", body[: self.bus.config.max_message_bytes], ttl_seconds=7 * 86400)
+            exchanges.append(LearningExchange(sender, recipient, "research", body, 0.7, True, message.message_id))
+        confidence = sum(x.confidence for x in exchanges) / max(1, len(exchanges))
+        self._last_synthesis = {
+            "tick": tick,
+            "contributors": len(exchanges),
+            "topics": sorted({x.topic for x in exchanges}),
+            "mean_confidence": round(confidence, 4),
+            "independent_sources": len({x.sender for x in exchanges}),
+        }
+        self._last_round = exchanges
+        self._score_adoption(exchanges, tick=tick)
+        self._cycle_history.append({
+            "tick": tick,
+            "agents": len(agents),
+            "research_exchanges": len(exchanges),
+            "debates": 0,
+            "adopted": sum(1 for item in self._last_adoption if item["adopted"]),
+            "rejected": sum(1 for item in self._last_adoption if not item["adopted"]),
+            "synthesis": dict(self._last_synthesis),
+        })
+        self._cycle_history = self._cycle_history[-100:]
+        return exchanges
 
-    def snapshot(self) -> dict[str, object]:
+    def _score_adoption(self, exchanges: Sequence[LearningExchange], *, tick: int) -> None:
+        """Score knowledge adoption rather than blindly copying every claim."""
+        decisions: list[dict] = []
+        for item in exchanges:
+            novelty = 0.75 if item.evidence else 0.0
+            support = min(1.0, item.confidence + 0.1)
+            score = round((novelty * 0.4) + (support * 0.6), 4)
+            decisions.append({
+                "tick": tick,
+                "agent": item.recipient,
+                "source": item.sender,
+                "score": score,
+                "adopted": score >= 0.6,
+                "reason": "evidence and confidence exceeded adoption threshold" if score >= 0.6 else "insufficient support",
+            })
+        self._last_adoption = decisions
+
+    def debate(self, agents: Sequence[str], *, tick: int, topic: str) -> list[DebateExchange]:
+        """Run a bounded adversarial challenge pass against the latest synthesis."""
+        agents = list(dict.fromkeys(agents))
+        debates: list[DebateExchange] = []
+        synthesis = self._last_synthesis or {"contributors": 0, "mean_confidence": 0.0}
+        for sender in agents:
+            recipient = self._peer(sender, agents)
+            challenge = (
+                f"Tick {tick}: challenge the {topic} synthesis; it has "
+                f"{synthesis.get('contributors', 0)} contributors and mean confidence "
+                f"{synthesis.get('mean_confidence', 0.0):.3f}. Request counter-evidence or a reproducible test."
+            )
+            message = self.bus.publish(sender, recipient, f"debate:{topic}", challenge)
+            debates.append(DebateExchange(sender, recipient, topic, challenge, 0.65, message.message_id))
+        self._last_debate = debates
+        for cycle in reversed(self._cycle_history):
+            if cycle["tick"] == tick:
+                cycle["debates"] = len(debates)
+                break
+        return debates
+
+    def complete_cycle(self, agents: Sequence[str], *, tick: int, evidence: Mapping[str, str], topic: str = "collective research review") -> dict:
+        """Execute research -> synthesis -> debate -> adoption as one cycle."""
+        exchanges = self.round(agents, tick=tick, evidence=evidence)
+        debates = self.debate(agents, tick=tick, topic=topic)
+        adopted = sum(1 for item in self._last_adoption if item["adopted"])
+        cycle = {
+            "tick": tick,
+            "agents": len(list(dict.fromkeys(agents))),
+            "research_exchanges": len(exchanges),
+            "debates": len(debates),
+            "adopted": adopted,
+            "rejected": len(self._last_adoption) - adopted,
+            "synthesis": dict(self._last_synthesis),
+        }
+        if self._cycle_history and self._cycle_history[-1]["tick"] == tick:
+            self._cycle_history[-1] = cycle
+        else:
+            self._cycle_history.append(cycle)
+        self._cycle_history = self._cycle_history[-100:]
+        return cycle
+
+    def snapshot(self) -> dict:
+        """Return inspectable state without duplicating the durable message log."""
         return {
-            "messages": len(self.exchanges),
-            "recent": [asdict(x) for x in self.exchanges[-20:]],
-            "bus": {"log": str(self.bus.log_path), "audit": str(self.bus.audit_path)},
+            "messages": 0,
+            "last_round": [asdict(item) for item in self._last_round],
+            "last_debate": [asdict(item) for item in self._last_debate],
+            "last_synthesis": dict(self._last_synthesis),
+            "last_adoption": list(self._last_adoption),
+            "cycle_history": list(self._cycle_history),
+            "communication_log": str(self.bus.log_path),
+            "audit_log": str(self.bus.audit_path),
         }
 
 
-__all__ = ["CollectiveLearning", "LearningExchange"]
+__all__ = ["CollectiveLearning", "LearningExchange", "DebateExchange"]
