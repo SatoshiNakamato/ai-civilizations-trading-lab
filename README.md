@@ -112,3 +112,9 @@ python -m pytest -q
 ```
 
 See `ARCHITECTURE.md`, `OPERATIONS.md`, `SECURITY.md` and `RELEASE_CHECKLIST.md` for project-level engineering and release documentation.
+
+## License
+
+AEON is source-available with **all rights reserved**. The source is publicly viewable for research, evaluation and educational inspection, but copying, modification, redistribution, sublicensing, publication or commercial/derivative use is not granted without prior written permission from the copyright holder.
+
+See [`LICENSE`](LICENSE) for the full terms.
