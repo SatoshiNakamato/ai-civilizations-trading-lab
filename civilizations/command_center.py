@@ -29,7 +29,8 @@ class CommandCenter:
         text=text.strip()
         if not text:return {'ok':False,'error':'empty command'}
         self._record(text); parts=shlex.split(text); cmd=parts[0].lower()
-        if cmd in {'status','observe','look'}:return {'ok':True,'status':self._summary(self.world_loop.step() if False else self.runtime.civilization.snapshot()) | {'life':self.runtime.life.snapshot(),'internet':self.runtime.world.snapshot(),'civilization':self.world_loop.platform.snapshot()}}
+        if cmd in {'status','observe','look'}:return {'ok':True,'status':self._summary(self.runtime.civilization.snapshot()) | {'life':self.runtime.life.snapshot(),'internet':self.runtime.world.snapshot(),'civilization':self.world_loop.platform.snapshot(),'endurance':self.world_loop.endurance.snapshot(self.world_loop.platform.active_budget)}}
+        if cmd in {'health','memory'}:return {'ok':True,'health':{'endurance':self.world_loop.endurance.snapshot(self.world_loop.platform.active_budget),'memory':self.world_loop.endurance.rss_mb(),'gc_objects':self.world_loop.endurance.collections,'python_pid':__import__('os').getpid()}}
         if cmd in {'world','observatory'}:return {'ok':True,'observatory':self.world_loop.platform.observatory()}
         if cmd in {'culture','memes'}:return {'ok':True,'culture':self.world_loop.platform.culture}
         if cmd in {'economy','markets'}:return {'ok':True,'economy':{'markets':self.world_loop.platform.markets,'resources':self.world_loop.platform.resources,'jobs':len(self.world_loop.platform.jobs)}}
@@ -50,17 +51,17 @@ class CommandCenter:
             if self.paused or self.shutdown:return {'ok':False,'error':'civilization is paused'}
             try:steps=max(1,min(1000,int(parts[1]))) if len(parts)>=2 else 1
             except ValueError:return {'ok':False,'error':'usage: run [1-1000]'}
-            state=self.world_loop.run(steps); return {'ok':True,'result':self._summary(state),'internet_learning':state.get('internet_learning'),'recent_decisions':state.get('recent_decisions',[])[-5:]}
+            state=self.world_loop.run(steps); return {'ok':True,'result':self._summary(state),'internet_learning':state.get('internet_learning'),'recent_decisions':state.get('recent_decisions',[])[-5:],'endurance':state.get('endurance')}
         if cmd=='inspect' and len(parts)==2:return {'ok':True,'agent':parts[1],'life':self.runtime.life.inspect(parts[1])}
         if cmd=='browse' and len(parts)==3:
             try:
                 result=self.runtime.world.browse(parts[1],parts[2]); result['content']=result['content'][:12000]; return {'ok':True,'observation':result}
             except Exception as exc:return {'ok':False,'error':str(exc)}
         if cmd=='save':self.world_loop.platform.save(); return {'ok':True,'message':'civilization persisted'}
-        return {'ok':False,'error':'commands: status | run [n] | inspect <agent> | browse <agent> <https_url> | world | culture | economy | organizations | science | metrics | speak <message> | tell <agent> <message> | charter | pause | resume | save | shutdown | exit'}
+        return {'ok':False,'error':'commands: status | health | run [n] | inspect <agent> | browse <agent> <https_url> | world | culture | economy | organizations | science | metrics | speak <message> | tell <agent> <message> | charter | pause | resume | save | shutdown | exit'}
 
 def main():
-    parser=argparse.ArgumentParser(description='AEON Creator Command Center'); parser.add_argument('--once'); args=parser.parse_args(); center=CommandCenter(); print('AEON COMMAND CENTER ONLINE'); print('Type commands at the CREATOR> prompt. `run` defaults to one life tick.'); print('Try: status | run | inspect A017 | world | culture | economy | science | metrics | shutdown')
+    parser=argparse.ArgumentParser(description='AEON Creator Command Center'); parser.add_argument('--once'); args=parser.parse_args(); center=CommandCenter(); print('AEON COMMAND CENTER ONLINE'); print('Type commands at the CREATOR> prompt. `run` defaults to one life tick.'); print('Try: status | health | run | inspect A017 | world | culture | economy | science | metrics | shutdown')
     if args.once:print(json.dumps(center.issue(args.once),indent=2,default=str));return
     while not center.shutdown:
         try:line=input('CREATOR> ')
