@@ -9,7 +9,7 @@ def test_duplicate_identity_is_rejected():
         validate_forecast_batch([key, key])
 
 
-def test_density_limit_is_per_civilization_market_and_horizon():
+def test_density_limit_is_per_civilization_market_across_horizons():
     rows = [
         ForecastKey("CIV-A", "BTCUSDT", "4h"),
         ForecastKey("CIV-A", "BTCUSDT", "1h"),
