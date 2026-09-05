@@ -7,7 +7,7 @@ from .civilization_platform import CivilizationPlatform
 from .memory_guard import collect, snapshot as memory_snapshot
 from .endurance import EnduranceController
 from .world_dynamics import WorldDynamics
-from .notification_governor import NotificationGovernor
+from .notification_governor import NotificationConfig, NotificationGovernor, SMTPEmailSender
 
 @dataclass(slots=True)
 class BeingDecision:
@@ -16,7 +16,14 @@ class BeingDecision:
 class AutonomousWorld:
     """Bounded-cost life loop with governed external research and alerts."""
     def __init__(self,runtime,root='world_state',seed=42):
-        self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5; self.notifications=NotificationGovernor()
+        self.runtime=runtime; self.life=runtime.life; self.world=runtime.world; self.rng=Random(seed); self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.decisions=[]; self.platform=CivilizationPlatform(root=root,seed=seed,active_budget=8); self.endurance=EnduranceController(); self.dynamics=WorldDynamics(self.platform,seed=seed); self.persist_every=5
+        # Pass the adapter/config explicitly so deployments using either the
+        # current governor or an older compatible constructor cannot fail at
+        # startup with a missing `sender` argument.
+        self.notifications=NotificationGovernor(
+            config=NotificationConfig.from_env(),
+            sender=SMTPEmailSender(),
+        )
         for aid,agent in self.runtime.civilization.agents.items(): self.platform.register(aid,{'archetype':agent.archetype})
     def _evolve(self,aid):
         s=self.life.states[aid]; model=self.life.self_models[aid]; scores={'explore':s.curiosity,'build':s.achievement,'socialize':s.belonging,'protect':s.security,'reflect':.35}; individuality=float(model.get('individuality',.5)); scores={k:max(0.,v+self.rng.uniform(-.05,.05)*individuality) for k,v in scores.items()}; action=max(scores,key=scores.get); old=str(model.get('purpose','discover')); choices={'explore':['discover','understand','invent'],'build':['build','invent','compete'],'socialize':['connect','protect','build'],'reflect':['understand myself']}; purpose=self.rng.choice(choices[action]) if action in choices and scores[action]>.45 else old; model['purpose']=purpose; hist=model.setdefault('preferred_actions',[]); hist.append(action); model['preferred_actions']=hist[-20:]
