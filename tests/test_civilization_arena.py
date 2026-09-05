@@ -69,3 +69,18 @@ def test_real_civilization_step_creates_arena_commitments_without_self_resolving
     assert snapshot["arena"]["commitments"] == 2
     assert snapshot["arena"]["resolved"] == 0
     assert all(c.civilization_id == "CIV-REAL" for c in arena.commitments.values())
+
+
+def test_selection_only_admits_sample_sufficient_civilizations():
+    arena = CivilizationArena()
+    arena.config.min_resolved = 2
+    for cid, probabilities in (("CIV-A", (0.9, 0.9)), ("CIV-B", (0.5,))):
+        for i, probability in enumerate(probabilities, 1):
+            fid = f"{cid}-{i}"
+            c = arena.commit(cid, f"A{i:03d}", "BTCUSDT", "4h", probability, forecast_id=fid, created_at=100 + i)
+            arena.submit(c)
+            arena.resolve(ForecastOutcome(fid, True, 200 + i, "external"))
+    result = arena.select(("CIV-A", "CIV-B"), survivors=2, generation=3)
+    assert result.selected == ("CIV-A",)
+    assert result.excluded == ("CIV-B",)
+    assert result.generation == 3
