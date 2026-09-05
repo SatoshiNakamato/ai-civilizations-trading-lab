@@ -7,7 +7,7 @@ from civilizations.runtime import CivilizationRuntime, RuntimeConfig
 
 def arena():
     a = CivilizationArena(ArenaConfig(min_resolved=2))
-    for cid, events in (("CIV-A", (True, True)), ("CIV-B", (False, True))):
+    for cid, events in (("CIV-A", (True, True, True, True, True)), ("CIV-B", (False, True, False, True, False))):
         for i, event in enumerate(events):
             a.record_prediction(cid, f"PAIR{i}USDT", .8 if event else .2, event, agent_id=f"agent-{i}", horizon="1h", created_at=10+i, observed_at=11+i)
     return a
