@@ -52,8 +52,11 @@ class PublicMarketData:
     def binance_klines(self, symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 200) -> list[Candle]:
         safe_limit = min(max(limit, 1), 1000)
         query = urllib.parse.urlencode({"symbol": symbol.upper(), "interval": interval, "limit": safe_limit})
-        data = self._get_json("https://api.binance.com/api/v3/klines?" + query)
-        return [Candle(row[0] / 1000, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])) for row in data]
+        try:
+            data = self._get_json("https://api.binance.com/api/v3/klines?" + query)
+            return [Candle(row[0] / 1000, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])) for row in data]
+        except (OSError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+            return self._fallback_candles(safe_limit)
 
     def binance_ticker(self, symbol: str = "BTCUSDT") -> dict[str, Any]:
         query = urllib.parse.urlencode({"symbol": symbol.upper()})
