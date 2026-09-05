@@ -1,3 +1,5 @@
+from pytest import approx
+
 from civilizations.arena import CivilizationArena, ForecastOutcome
 
 
@@ -29,8 +31,8 @@ def test_brier_and_calibration_are_objective():
         arena.resolve(ForecastOutcome(f"f{i}", i == 1, 200 + i, "external"))
     score = arena.score("CIV-A")
     assert score.resolved == 2
-    assert score.brier_score == 0.009999999999999997
-    assert score.calibration_error == 0.1
+    assert score.brier_score == approx(0.01)
+    assert score.calibration_error == approx(0.1)
     assert score.sample_sufficient is True
     assert 0.0 <= score.fitness <= 1.0
 
