@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from time import time
 
-from .notification_governor import NotificationGovernor
+from .notifications import NotificationGovernor, SMTPEmailSender
 
 
 @dataclass
@@ -39,25 +39,25 @@ class AlertCandidate:
 class EmailAlertGateway:
     """SMTP gateway for high-value civilization alerts.
 
-    Delivery is delegated to NotificationGovernor so SMTP provider failures,
-    especially Gmail quota responses, cannot crash or repeatedly restart the
-    civilization worker.
+    All delivery is routed through the single public NotificationGovernor so
+    the runtime has one consistent dedupe/rate-limit/failure-isolation boundary.
     """
 
     def __init__(self, recipient: str | None = None, governor: NotificationGovernor | None = None):
-        self.recipient = recipient or os.getenv("CIVILIZATION_ALERT_EMAIL", "iNeed2p@wearehackerone.com")
+        self.recipient = recipient or os.getenv("CIVILIZATION_ALERT_EMAIL", "")
         self.min_confidence = float(os.getenv("CIVILIZATION_ALERT_MIN_CONFIDENCE", "0.80"))
         self.min_edge = float(os.getenv("CIVILIZATION_ALERT_MIN_EDGE", "0.005"))
         self.cooldown_seconds = int(os.getenv("CIVILIZATION_ALERT_COOLDOWN", "1800"))
         self.last_sent: dict[str, float] = {}
         self.sent = 0
         self.suppressed = 0
-        self.governor = governor or NotificationGovernor()
+        if governor is None:
+            sender = SMTPEmailSender(recipient=self.recipient)
+            governor = NotificationGovernor(sender)
+        self.governor = governor
 
     def enabled(self) -> bool:
-        # Governor owns the complete SMTP credential check. This method keeps
-        # the historical gateway API while avoiding secret values in snapshots.
-        return self.governor._credentials() is not None and self.governor.config.enabled and self.governor.config.email_enabled
+        return bool(self.governor.config.enabled and self.governor.config.email_enabled and self.governor.sender)
 
     def should_alert(self, candidate: AlertCandidate) -> bool:
         if candidate.severity not in {"CRITICAL", "HIGH"}:
@@ -101,8 +101,8 @@ class EmailAlertGateway:
         if not self.should_alert(candidate):
             return False
         subject, body = self._message(candidate)
-        result = self.governor.notify(severity=candidate.severity, subject=subject, body=body)
-        if result.get("sent"):
+        result = self.governor.notify(candidate.severity, subject, body)
+        if result.sent:
             key = f"{candidate.category}:{candidate.title.strip().lower()}"
             self.last_sent[key] = time()
             self.sent += 1
@@ -118,5 +118,9 @@ class EmailAlertGateway:
             "suppressed": self.suppressed,
             "min_confidence": self.min_confidence,
             "min_edge": self.min_edge,
-            "governor": self.governor.snapshot(),
+            "governor": {
+                "cycle_sent": len(self.governor._sent_times),
+                "day_sent": self.governor._day_count,
+                "day": self.governor._day,
+            },
         }
