@@ -74,6 +74,16 @@ class CollectiveLearning:
         }
         self._last_round = exchanges
         self._score_adoption(exchanges, tick=tick)
+        self._cycle_history.append({
+            "tick": tick,
+            "agents": len(agents),
+            "research_exchanges": len(exchanges),
+            "debates": 0,
+            "adopted": sum(1 for item in self._last_adoption if item["adopted"]),
+            "rejected": sum(1 for item in self._last_adoption if not item["adopted"]),
+            "synthesis": dict(self._last_synthesis),
+        })
+        self._cycle_history = self._cycle_history[-100:]
         return exchanges
 
     def _score_adoption(self, exchanges: Sequence[LearningExchange], *, tick: int) -> None:
@@ -108,6 +118,10 @@ class CollectiveLearning:
             message = self.bus.publish(sender, recipient, f"debate:{topic}", challenge)
             debates.append(DebateExchange(sender, recipient, topic, challenge, 0.65, message.message_id))
         self._last_debate = debates
+        for cycle in reversed(self._cycle_history):
+            if cycle["tick"] == tick:
+                cycle["debates"] = len(debates)
+                break
         return debates
 
     def complete_cycle(self, agents: Sequence[str], *, tick: int, evidence: Mapping[str, str], topic: str = "collective research review") -> dict:
@@ -124,7 +138,10 @@ class CollectiveLearning:
             "rejected": len(self._last_adoption) - adopted,
             "synthesis": dict(self._last_synthesis),
         }
-        self._cycle_history.append(cycle)
+        if self._cycle_history and self._cycle_history[-1]["tick"] == tick:
+            self._cycle_history[-1] = cycle
+        else:
+            self._cycle_history.append(cycle)
         self._cycle_history = self._cycle_history[-100:]
         return cycle
 
