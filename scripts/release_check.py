@@ -2,6 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
+
+# Running ``python scripts/release_check.py`` puts ``scripts/`` first on
+# sys.path. Add the repository root so local packages (including namespace
+# packages such as ``backtesting``) resolve the same way they do under pytest.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backtesting.validation import summarize_pnl
 from release.validation import validate_paper_ledger
