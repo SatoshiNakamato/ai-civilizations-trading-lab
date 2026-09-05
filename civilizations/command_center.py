@@ -17,7 +17,7 @@ class CreatorCommand:
 
 @dataclass
 class CommandCenter:
-    """Interactive Creator console. Run `python -m civilizations.command_center`."""
+    """Interactive Creator console with compact output for mobile/Termux."""
     runtime: AEONRuntime | None = None
     inbox: Inbox | None = None
     treasury: Treasury | None = None
@@ -34,15 +34,21 @@ class CommandCenter:
         Path(self.state_file).parent.mkdir(parents=True, exist_ok=True)
 
     def _record(self, text):
-        cmd=CreatorCommand(text, datetime.now(timezone.utc).isoformat()); self.history.append(cmd)
-        self.history=self.history[-200:]
+        cmd=CreatorCommand(text, datetime.now(timezone.utc).isoformat()); self.history.append(cmd); self.history=self.history[-200:]
         with open(self.state_file,'a',encoding='utf-8') as f: f.write(json.dumps(cmd.__dict__)+'\n')
+
+    def _summary(self, state):
+        life=state.get('life',{}); internet=state.get('internet',{}); return {
+            'tick':state.get('tick',0),'generation':state.get('generation',0),'beings':state.get('beings',state.get('agents',0)),
+            'ideas':state.get('ideas',0),'memories':life.get('memories',0),'relationships':life.get('relationships',0),
+            'reflections':life.get('reflections',0),'artifacts':internet.get('artifacts',0),'web_events':internet.get('events',0),
+            'paused':self.paused,'shutdown':self.shutdown}
 
     def issue(self, text):
         text=text.strip()
         if not text: return {'ok':False,'error':'empty command'}
         self._record(text); parts=shlex.split(text); cmd=parts[0].lower() if parts else ''
-        if cmd in {'status','observe','look'}: return {'ok':True,'status':self.status(compact=True)}
+        if cmd in {'status','observe','look'}: return {'ok':True,'status':self._summary(self.runtime.civilization.snapshot()) | {'life':self.runtime.life.snapshot(),'internet':self.runtime.world.snapshot()}}
         if cmd=='charter': return {'ok':True,'charter':self.charter.prompt(),'fingerprint':self.charter.fingerprint}
         if cmd in {'pause','freeze'}: self.paused=True; return {'ok':True,'message':'Civilization paused.'}
         if cmd in {'resume','continue'}:
@@ -57,7 +63,8 @@ class CommandCenter:
             if self.paused or self.shutdown: return {'ok':False,'error':'civilization is paused'}
             try: steps=max(1,min(1000,int(parts[1]))) if len(parts)>=2 else 1
             except ValueError: return {'ok':False,'error':'usage: run [1-1000]'}
-            return {'ok':True,'state':self.world_loop.run(steps)}
+            state=self.world_loop.run(steps)
+            return {'ok':True,'result':self._summary(state),'internet_learning':state.get('internet_learning'),'recent_decisions':state.get('recent_decisions',[])[-5:]}
         if cmd=='inspect' and len(parts)==2: return {'ok':True,'agent':parts[1],'life':self.runtime.life.inspect(parts[1])}
         if cmd=='browse' and len(parts)==3:
             try:
@@ -66,15 +73,7 @@ class CommandCenter:
         return {'ok':False,'error':'commands: status | charter | speak <message> | tell <agent> <message> | run [n] | inspect <agent> | browse <agent> <https_url> | pause | resume | shutdown | exit'}
 
     def status(self, compact=False):
-        state=self.runtime.civilization.snapshot(); life=self.runtime.life.snapshot(); internet=self.runtime.world.snapshot()
-        agents=state.get('agents',0)
-        if isinstance(agents,(list,tuple,dict)): agents=len(agents)
-        elif not isinstance(agents,int): agents=0
-        if compact:
-            return {'tick':state.get('tick',0),'generation':state.get('generation',0),'beings':agents,'ideas':state.get('ideas',0),'messages':state.get('messages',0),'paused':self.paused,'shutdown':self.shutdown,'commands':len(self.history),'life':life,'internet':internet}
-        state.update({'paused':self.paused,'shutdown':self.shutdown,'creator':self.charter.creator_name,'charter_fingerprint':self.charter.fingerprint,'commands':len(self.history),'life':life,'internet':internet})
-        if self.treasury is not None: state['treasury']=round(self.treasury.balance,2)
-        return state
+        state=self.runtime.civilization.snapshot(); life=self.runtime.life.snapshot(); internet=self.runtime.world.snapshot(); state.update({'paused':self.paused,'shutdown':self.shutdown,'creator':self.charter.creator_name,'charter_fingerprint':self.charter.fingerprint,'commands':len(self.history),'life':life,'internet':internet}); return state
 
 def main():
     parser=argparse.ArgumentParser(description='AEON Creator Command Center'); parser.add_argument('--once',help='execute one command and exit'); args=parser.parse_args(); center=CommandCenter()
