@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
-from .universe import MarketPair
-
 
 @dataclass(frozen=True)
 class ExchangePair:
@@ -17,7 +15,7 @@ class ExchangePair:
 
 
 class ExchangeDiscoveryAdapter:
-    """Normalize an exchange's symbol metadata into AEON market pairs."""
+    """Normalize an exchange's symbol metadata into venue-aware market pairs."""
 
     def __init__(self, exchange: str, fetch_metadata: Callable[[], Iterable[Mapping[str, Any]]]) -> None:
         if not exchange.strip():
@@ -40,8 +38,9 @@ class ExchangeDiscoveryAdapter:
             pairs.append(ExchangePair(symbol, base, quote, status, self.exchange))
         return tuple(sorted(pairs, key=lambda p: p.symbol))
 
-    def trading_pairs(self) -> tuple[MarketPair, ...]:
-        return tuple(MarketPair(p.symbol, p.status) for p in self.discover() if p.status == "TRADING")
+    def trading_pairs(self) -> tuple[ExchangePair, ...]:
+        """Return active pairs while preserving venue metadata."""
+        return tuple(p for p in self.discover() if p.status == "TRADING")
 
     def symbols(self) -> tuple[str, ...]:
         return tuple(p.symbol for p in self.trading_pairs())
