@@ -27,20 +27,21 @@ class ContinuousArbitrage:
 
     def cycle(self):
         self.cycle_count += 1; opened = closed = 0
+        live_executor = getattr(self.runtime, "live_executor", None)
         for agent in self.agents:
-            if len(self.open_by_agent[agent]) >= self.max_open_per_agent and self.runtime.live_executor is None: continue
+            if len(self.open_by_agent[agent]) >= self.max_open_per_agent and live_executor is None: continue
             try:
                 fill = self.runtime.scan_and_open(agent)
             except Exception:
                 self.live_errors += 1
                 continue
             if fill is not None:
-                if self.runtime.live_executor is not None:
+                if live_executor is not None:
                     self.live_executed += 1; opened += 1
                 else:
                     self.open_by_agent[agent].append(fill.fill_id); opened += 1
 
-        if self.runtime.live_executor is None and any(self.open_by_agent.values()) and hasattr(self.runtime, "scanner"):
+        if live_executor is None and any(self.open_by_agent.values()) and hasattr(self.runtime, "scanner"):
             quotes = self.runtime.scanner.feed.snapshot()
             for agent, fill_ids in self.open_by_agent.items():
                 for fill_id in list(fill_ids):
@@ -55,7 +56,9 @@ class ContinuousArbitrage:
 
         snap = self.runtime.snapshot(); leaderboard = getattr(self.runtime, "leaderboard", None)
         profitable = leaderboard.profitable(3) if leaderboard is not None else []
-        return CycleResult(self.cycle_count, opened, closed, snap["paper"]["realized_pnl"], profitable, self.live_executed, self.live_errors)
+        paper = snap.get("paper", {}) if isinstance(snap, dict) else {}
+        realized_pnl = float(paper.get("realized_pnl", 0.0) or 0.0)
+        return CycleResult(self.cycle_count, opened, closed, realized_pnl, profitable, self.live_executed, self.live_errors)
 
     def run(self, cycles=1, interval_seconds=5):
         results=[]
