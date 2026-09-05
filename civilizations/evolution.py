@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Iterable
+from hashlib import sha256
 if TYPE_CHECKING:
     from .core import Agent, Idea
 
@@ -67,3 +68,39 @@ def crossover(a:'Idea',b:'Idea',agent:'Agent',rng)->'Idea':
     from .core import Idea
     return Idea(title=f'cross({a.title[:24]}+{b.title[:24]})-{rng.randrange(1_000_000)}',thesis=f'Combine [{a.thesis}] with [{b.thesis}] and test the interaction out-of-sample.',origin=agent.agent_id,generation=max(a.generation,b.generation)+1,lineage=a.lineage+[a.origin,b.origin])
 def rank_ideas(ideas:Iterable['Idea'])->list['Idea']:return sorted(ideas,key=lambda x:(x.validation_passed,x.fitness),reverse=True)
+
+@dataclass(frozen=True)
+class Survivor:
+    civilization_id: str
+    fitness: float
+
+@dataclass(frozen=True)
+class Descendant:
+    civilization_id: str
+    parent_id: str
+    generation: int
+    mutation: str
+    genome_hash: str
+
+class EvolutionEngine:
+    """Deterministically reproduce selected civilizations while recording lineage."""
+    def __init__(self, lineage=None):
+        self.lineage = lineage
+
+    def reproduce(self, survivors: Iterable[Survivor], *, generation: int, offspring_per_parent: int = 1, created_at: float = 0) -> tuple[Descendant, ...]:
+        if generation < 1 or offspring_per_parent < 1:
+            raise ValueError("generation and offspring_per_parent must be positive")
+        if self.lineage is None:
+            raise ValueError("lineage ledger is required")
+        ordered = sorted(survivors, key=lambda x: (-x.fitness, x.civilization_id))
+        descendants = []
+        for parent in ordered:
+            if not parent.civilization_id.strip():
+                raise ValueError("civilization_id is required")
+            for index in range(offspring_per_parent):
+                child_id = f"{parent.civilization_id}.g{generation}.{index + 1}"
+                mutation = f"mutation-{generation}-{index + 1}"
+                genome_hash = sha256(f"{parent.civilization_id}|{generation}|{index + 1}|{mutation}".encode()).hexdigest()
+                self.lineage.spawn(parent.civilization_id, child_id, generation=generation, mutation=mutation, created_at=created_at)
+                descendants.append(Descendant(child_id, parent.civilization_id, generation, mutation, genome_hash))
+        return tuple(descendants)
