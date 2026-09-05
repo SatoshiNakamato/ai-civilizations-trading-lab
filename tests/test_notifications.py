@@ -1,3 +1,5 @@
+import smtplib
+
 from civilizations.notifications import NotificationGovernor, NotificationGovernorConfig, SMTPEmailSender
 
 
@@ -36,6 +38,25 @@ def test_provider_failure_degrades_without_raising():
     result = governor.notify("critical", "Alpha", "BTC spread")
     assert result.sent is False
     assert result.reason == "delivery_degraded:RuntimeError"
+
+
+def test_daily_smtp_quota_opens_circuit():
+    clock = Clock()
+
+    class QuotaFailure:
+        def __call__(self, _notification):
+            raise smtplib.SMTPDataError(550, b"5.4.5 Daily user sending limit exceeded")
+
+    governor = NotificationGovernor(
+        QuotaFailure(),
+        NotificationGovernorConfig(cooldown_seconds=0),
+        clock=clock,
+    )
+    first = governor.notify("critical", "Alpha", "BTC spread")
+    second = governor.notify("critical", "Other", "ETH spread")
+    assert first.reason == "smtp_quota"
+    assert second.reason == "smtp_circuit_open"
+    assert governor.snapshot()["circuit_open"] is True
 
 
 def test_fingerprint_is_deterministic():
