@@ -83,10 +83,11 @@ def test_smtp_sender_reads_delivery_variables(monkeypatch):
     monkeypatch.setenv("CIVILIZATION_SMTP_HOST", "smtp.example.test")
     monkeypatch.setenv("CIVILIZATION_SMTP_PORT", "587")
     monkeypatch.setenv("CIVILIZATION_SMTP_USER", "bot@example.test")
-    monkeypatch.setenv("CIVILIZATION_SMTP_PASSWORD", "secret")
+    monkeypatch.setenv("CIVILIZATION_SMTP_PASSWORD", "se cret")
     monkeypatch.setenv("CIVILIZATION_ALERT_FROM", "alerts@example.test")
     monkeypatch.setenv("CIVILIZATION_ALERT_EMAIL", "owner@example.test")
     sender = SMTPEmailSender()
     assert (sender.host, sender.port, sender.user, sender.sender, sender.recipient) == (
-        "smtp.example.test", 587, "bot@example.test", "alerts@example.test", "owner@example.test"
+        "smtp.example.test", 587, "bot@example.test", "bot@example.test", "owner@example.test"
     )
+    assert sender.password == "secret"
