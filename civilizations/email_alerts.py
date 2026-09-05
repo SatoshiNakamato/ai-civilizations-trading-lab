@@ -73,7 +73,8 @@ class EmailAlertGateway:
         if candidate.category in {"arbitrage", "alpha-token"} and candidate.edge < self.min_edge:
             return False
         key = f"{candidate.category}:{candidate.title.strip().lower()}"
-        if time() - self.last_sent.get(key, 0) < self.cooldown_seconds:
+        last_sent = self.last_sent.get(key)
+        if last_sent is not None and time() - last_sent < self.cooldown_seconds:
             self.suppressed += 1
             return False
         return True
