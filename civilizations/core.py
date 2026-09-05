@@ -39,10 +39,8 @@ class Civilization:
         for i in range(size):
             key,role=ARCHETYPES[i%len(ARCHETYPES)]; self.agents[f'A{i+1:03d}']=Agent(f'A{i+1:03d}',f'{role} {i+1:03d}',key,'female' if i%2 else 'male',self.rng.random(),self.rng.random(),self.rng.random())
     def _research_query(self,a): return {'quant':'statistical out-of-sample','arb':'price discrepancy transaction costs','macro':'macro economic regime','momentum':'price persistence liquidity','value':'fair value valuation','contrarian':'crowded positioning reversal','risk':'volatility correlation drawdown','probability':'probability forecast calibration','microstructure':'market liquidity spread order flow','explorer':'falsifiable hypothesis validation'}[a.archetype]
-    def _market_for_agent(self,a):
-        return self.market_universe.choose(self.agents_order_index(a.agent_id))
-    def agents_order_index(self,agent_id):
-        return sum(1 for aid in self.agents if aid < agent_id)
+    def _market_for_agent(self,a): return self.market_universe.choose(self.agents_order_index(a.agent_id))
+    def agents_order_index(self,agent_id): return sum(1 for aid in self.agents if aid < agent_id)
     def _market_test(self,symbol,interval):
         key=(symbol,interval)
         if key not in self._validation_cache:self._validation_cache[key]=self.verifier.verify(symbol,interval,500)
@@ -50,16 +48,15 @@ class Civilization:
     def _forecast_probability(self,agent,idea,validation):
         base=.5 + (validation.score * .25) + ((agent.curiosity-.5) * .1)
         return max(.01,min(.99,base))
-    def _event_for(self,symbol,interval,probability):
-        validation=self._validation_cache[(symbol,interval)]
-        threshold=validation.final_price if hasattr(validation,'final_price') else 1.0
-        direction='above' if probability >= .5 else 'below'
-        return MarketEvent(symbol,interval,direction,max(float(threshold),1e-12),self.tick)
+    def _event_for(self,symbol,interval,validation,created_at):
+        threshold=float(getattr(validation,'final_price',1.0))
+        direction='above'
+        return MarketEvent(symbol,interval,direction,max(threshold,1e-12),created_at)
     def step(self,active_ids=None):
         self.tick+=1; self._validation_cache.clear(); proposals=[]; active=set(active_ids) if active_ids is not None else set(self.agents)
-        if hasattr(self.market_universe,'refresh') and getattr(self.market_universe,'_discover',None) is not None: self.market_universe.refresh()
+        if getattr(self.market_universe,'_discover',None) is not None: self.market_universe.refresh()
         for agent in (a for aid,a in self.agents.items() if aid in active):
-            query=self._research_query(agent); self.bureau.submit_question(agent.agent_id,query,agent.curiosity); context=self.research_bridge.build_context(agent.agent_id,query,limit=3); idea=agent.observe_and_propose(self.tick,self.rng,context); symbol=self._market_for_agent(agent); interval='4h'; validation=self._market_test(symbol,interval); agent.evaluate(idea,validation); agent.ideas.append(idea); agent.ideas=agent.ideas[-self.max_agent_ideas:]; self.global_ideas.append(idea); self.global_ideas=self.global_ideas[-self.max_ideas:]; probability=self._forecast_probability(agent,idea,validation); commitment=self.arena.commit(self.civilization_id,agent.agent_id,symbol,interval,probability); self.arena.submit(commitment); event=self._event_for(symbol,interval,probability); self.forecast_contracts.register(bind_forecast(commitment,event)); self.evolution.record_prediction(agent.agent_id,symbol,idea.thesis,validation.score,probability,validation.samples,interval); self.society.record_knowledge(f'{agent.archetype}:{idea.title}',idea.thesis,agent.agent_id,idea.fitness,self.generation); self.evolution.publish(agent.agent_id,agent.archetype,idea.thesis,[s.get('url','') for s in context.get('sources',[])]); self.emergence.observe(agent,idea,self._sample_peers(agent.agent_id,3),self.tick); proposals.append(idea)
+            query=self._research_query(agent); self.bureau.submit_question(agent.agent_id,query,agent.curiosity); context=self.research_bridge.build_context(agent.agent_id,query,limit=3); idea=agent.observe_and_propose(self.tick,self.rng,context); symbol=self._market_for_agent(agent); interval='4h'; validation=self._market_test(symbol,interval); agent.evaluate(idea,validation); agent.ideas.append(idea); agent.ideas=agent.ideas[-self.max_agent_ideas:]; self.global_ideas.append(idea); self.global_ideas=self.global_ideas[-self.max_ideas:]; probability=self._forecast_probability(agent,idea,validation); commitment=self.arena.commit(self.civilization_id,agent.agent_id,symbol,interval,probability); self.arena.submit(commitment); event=self._event_for(symbol,interval,validation,commitment.created_at); self.forecast_contracts.register(bind_forecast(commitment,event)); self.evolution.record_prediction(agent.agent_id,symbol,idea.thesis,validation.score,probability,validation.samples,interval); self.society.record_knowledge(f'{agent.archetype}:{idea.title}',idea.thesis,agent.agent_id,idea.fitness,self.generation); self.evolution.publish(agent.agent_id,agent.archetype,idea.thesis,[s.get('url','') for s in context.get('sources',[])]); self.emergence.observe(agent,idea,self._sample_peers(agent.agent_id,3),self.tick); proposals.append(idea)
         resolved=self.evolution.resolve_real_validation(self._validation_cache,min_samples=200,tolerance=.02); champions=rank_ideas(proposals)[:20]
         for idea in champions:
             for peer in self._sample_peers(idea.origin,3):
