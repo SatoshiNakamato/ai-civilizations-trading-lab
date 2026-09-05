@@ -56,9 +56,20 @@ def test_live_arbitrage_requires_confirmation(monkeypatch, tmp_path):
 
 
 def test_email_alert_contains_token_metadata(monkeypatch):
+    # Keep this unit test hermetic even when a developer/hosting environment
+    # contains real AEON notification variables.
+    monkeypatch.setenv("AEON_NOTIFICATION_ENABLED", "true")
+    monkeypatch.setenv("AEON_NOTIFICATION_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("AEON_NOTIFICATION_MIN_SEVERITY", "HIGH")
+    monkeypatch.setenv("AEON_NOTIFICATION_MAX_PER_CYCLE", "10")
+    monkeypatch.setenv("AEON_NOTIFICATION_MAX_PER_DAY", "100")
+    monkeypatch.setenv("AEON_NOTIFICATION_COOLDOWN_SECONDS", "0")
+    monkeypatch.setenv("AEON_NOTIFICATION_DEDUP_ENABLED", "true")
+    monkeypatch.setenv("AEON_NOTIFICATION_DEDUP_WINDOW_SECONDS", "3600")
     monkeypatch.setenv("CIVILIZATION_SMTP_HOST", "smtp.test")
     monkeypatch.setenv("CIVILIZATION_SMTP_USER", "user")
     monkeypatch.setenv("CIVILIZATION_SMTP_PASSWORD", "secret")
+    monkeypatch.setenv("CIVILIZATION_ALERT_FROM", "alerts@example.com")
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
     gateway = EmailAlertGateway(recipient="alerts@example.com")
     candidate = AlertCandidate(
@@ -77,6 +88,7 @@ class FakeSMTP:
     def __init__(self, *args, **kwargs): pass
     def __enter__(self): return self
     def __exit__(self, *args): return False
+    def ehlo(self): pass
     def starttls(self): pass
     def login(self, user, password): pass
     def send_message(self, msg):
