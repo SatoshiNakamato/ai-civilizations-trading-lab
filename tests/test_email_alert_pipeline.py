@@ -48,8 +48,8 @@ def test_high_value_alpha_candidate_is_sent_to_existing_email_gateway(monkeypatc
     assert result["alerts"]["alpha_sent"] == 1
 
 
-def test_alert_gateway_default_recipient_is_preserved(monkeypatch):
-    monkeypatch.delenv("CIVILIZATION_ALERT_EMAIL", raising=False)
+def test_alert_gateway_recipient_comes_from_environment(monkeypatch):
+    monkeypatch.setenv("CIVILIZATION_ALERT_EMAIL", "alerts@example.test")
     from civilizations.email_alerts import EmailAlertGateway
     gateway = EmailAlertGateway()
-    assert gateway.recipient == "iNeed2p@wearehackerone.com"
+    assert gateway.recipient == "alerts@example.test"
