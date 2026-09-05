@@ -36,7 +36,12 @@ class DebateExchange:
 
 
 class CollectiveLearning:
-    """Coordinate a bounded research -> debate -> adoption evolution loop."""
+    """Coordinate a bounded research -> debate -> adoption evolution loop.
+
+    Communication limits are resource controls, not civilization-fatal errors.
+    When the message governor is exhausted, the learning cycle records the
+    throttling event and continues with the evidence already available.
+    """
 
     def __init__(self, bus: AgentCommunicationBus, seed: int = 42):
         self.bus = bus
@@ -46,6 +51,8 @@ class CollectiveLearning:
         self._last_synthesis: dict = {}
         self._last_adoption: list[dict] = []
         self._cycle_history: list[dict] = []
+        self._throttled_messages = 0
+        self._last_quota_event: dict | None = None
 
     def _peer(self, sender: str, agents: Sequence[str]) -> str:
         peers = [aid for aid in agents if aid != sender]
@@ -53,8 +60,25 @@ class CollectiveLearning:
             raise ValueError("collective learning requires at least two agents")
         return self.rng.choice(peers)
 
+    def _safe_publish(self, sender: str, recipient: str, topic: str, body: str, *, ttl_seconds: int | None = None):
+        """Publish when capacity exists; throttle instead of crashing the loop."""
+        try:
+            return self.bus.publish(sender, recipient, topic, body, ttl_seconds=ttl_seconds)
+        except RuntimeError as exc:
+            if str(exc) != "communication message quota exhausted":
+                raise
+            self._throttled_messages += 1
+            self._last_quota_event = {
+                "type": "communication_quota_exhausted",
+                "sender": sender,
+                "recipient": recipient,
+                "topic": topic,
+                "action": "throttled",
+            }
+            return None
+
     def round(self, agents: Sequence[str], *, tick: int, evidence: Mapping[str, str]) -> list[LearningExchange]:
-        """Run the research-sharing stage: every agent contributes to one peer."""
+        """Run the research-sharing stage: every agent contributes when capacity allows."""
         agents = list(dict.fromkeys(agents))
         exchanges: list[LearningExchange] = []
         for sender in agents:
@@ -62,8 +86,15 @@ class CollectiveLearning:
             if not body:
                 body = f"{sender} contributed no new evidence at tick {tick}."
             recipient = self._peer(sender, agents)
-            message = self.bus.publish(sender, recipient, "research", body[: self.bus.config.max_message_bytes], ttl_seconds=7 * 86400)
-            exchanges.append(LearningExchange(sender, recipient, "research", body, 0.7, True, message.message_id))
+            message = self._safe_publish(
+                sender,
+                recipient,
+                "research",
+                body[: self.bus.config.max_message_bytes],
+                ttl_seconds=7 * 86400,
+            )
+            if message is not None:
+                exchanges.append(LearningExchange(sender, recipient, "research", body, 0.7, True, message.message_id))
         confidence = sum(x.confidence for x in exchanges) / max(1, len(exchanges))
         self._last_synthesis = {
             "tick": tick,
@@ -71,6 +102,7 @@ class CollectiveLearning:
             "topics": sorted({x.topic for x in exchanges}),
             "mean_confidence": round(confidence, 4),
             "independent_sources": len({x.sender for x in exchanges}),
+            "communication_throttled": self._last_quota_event is not None,
         }
         self._last_round = exchanges
         self._score_adoption(exchanges, tick=tick)
@@ -82,6 +114,7 @@ class CollectiveLearning:
             "adopted": sum(1 for item in self._last_adoption if item["adopted"]),
             "rejected": sum(1 for item in self._last_adoption if not item["adopted"]),
             "synthesis": dict(self._last_synthesis),
+            "communication_throttled": self._last_quota_event is not None,
         })
         self._cycle_history = self._cycle_history[-100:]
         return exchanges
@@ -115,8 +148,9 @@ class CollectiveLearning:
                 f"{synthesis.get('contributors', 0)} contributors and mean confidence "
                 f"{synthesis.get('mean_confidence', 0.0):.3f}. Request counter-evidence or a reproducible test."
             )
-            message = self.bus.publish(sender, recipient, f"debate:{topic}", challenge)
-            debates.append(DebateExchange(sender, recipient, topic, challenge, 0.65, message.message_id))
+            message = self._safe_publish(sender, recipient, f"debate:{topic}", challenge)
+            if message is not None:
+                debates.append(DebateExchange(sender, recipient, topic, challenge, 0.65, message.message_id))
         self._last_debate = debates
         for cycle in reversed(self._cycle_history):
             if cycle["tick"] == tick:
@@ -126,17 +160,19 @@ class CollectiveLearning:
 
     def complete_cycle(self, agents: Sequence[str], *, tick: int, evidence: Mapping[str, str], topic: str = "collective research review") -> dict:
         """Execute research -> synthesis -> debate -> adoption as one cycle."""
-        exchanges = self.round(agents, tick=tick, evidence=evidence)
+        self.round(agents, tick=tick, evidence=evidence)
         debates = self.debate(agents, tick=tick, topic=topic)
         adopted = sum(1 for item in self._last_adoption if item["adopted"])
         cycle = {
             "tick": tick,
             "agents": len(list(dict.fromkeys(agents))),
-            "research_exchanges": len(exchanges),
+            "research_exchanges": len(self._last_round),
             "debates": len(debates),
             "adopted": adopted,
             "rejected": len(self._last_adoption) - adopted,
             "synthesis": dict(self._last_synthesis),
+            "communication_throttled": self._last_quota_event is not None,
+            "throttled_messages": self._throttled_messages,
         }
         if self._cycle_history and self._cycle_history[-1]["tick"] == tick:
             self._cycle_history[-1] = cycle
@@ -156,6 +192,8 @@ class CollectiveLearning:
             "cycle_history": list(self._cycle_history),
             "communication_log": str(self.bus.log_path),
             "audit_log": str(self.bus.audit_path),
+            "throttled_messages": self._throttled_messages,
+            "last_quota_event": dict(self._last_quota_event) if self._last_quota_event else None,
         }
 
 
