@@ -6,6 +6,8 @@ from urllib.parse import urlparse, quote_plus
 from urllib.request import Request, urlopen
 import ipaddress, socket, re
 
+from .evolution_governor import EvolutionGovernor, EvolutionGovernorConfig
+
 @dataclass
 class WorldPolicy:
     blocked_hosts: set[str] = field(default_factory=set)
@@ -13,10 +15,14 @@ class WorldPolicy:
     timeout_seconds: int = 10
 
 class InternetWorld:
-    """Public Internet senses plus persistent creation space for AEON beings."""
-    def __init__(self, root='world_artifacts', policy=None):
+    """Public Internet senses plus governed persistent creation space for AEON beings."""
+    def __init__(self, root='world_artifacts', policy=None, evolution_governor=None):
         self.root=Path(root).resolve(); self.root.mkdir(parents=True,exist_ok=True)
         self.policy=policy or WorldPolicy(); self.events=[]
+        evolution_root = self.root.parent / 'data' / 'evolution'
+        self.evolution = evolution_governor or EvolutionGovernor(
+            EvolutionGovernorConfig(workspace=evolution_root, max_file_bytes=self.policy.max_bytes)
+        )
 
     def _public_host(self,host):
         host=(host or '').lower().rstrip('.')
@@ -57,14 +63,27 @@ class InternetWorld:
         return {'query':query,'results':results}
 
     def create_artifact(self,agent_id,relative_path,content):
+        """Create a durable artifact through the evolution governor.
+
+        Existing callers keep their API, while persistence is now subject to
+        namespace, path, byte, file-count and audit controls.
+        """
+        # World artifacts remain a separate inert output surface. The governor
+        # stores the same content under agent memory so it survives restarts and
+        # can later be promoted to a reviewed repository artifact.
+        relative_path = relative_path.replace('\\', '/')
+        parts = Path(relative_path).parts
+        if not parts or parts[0] != agent_id:
+            raise PermissionError('artifact must be owned by its creating agent')
+        record = self.evolution.write(agent_id, 'memory', relative_path, content)
         target=(self.root/relative_path).resolve()
         if self.root not in target.parents: raise PermissionError('Artifact path escaped the world')
         data=content.encode('utf-8')
         if len(data)>self.policy.max_bytes: raise ValueError('Artifact exceeds world byte limit')
         target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(data)
-        self.events.append({'type':'artifact_created','agent':agent_id,'path':str(target.relative_to(self.root)),'bytes':len(data),'time':time()})
+        self.events.append({'type':'artifact_created','agent':agent_id,'path':str(target.relative_to(self.root)),'bytes':len(data),'time':time(),'evolution_record':record.sha256})
         self.events=self.events[-300:]
         return str(target.relative_to(self.root))
 
     def snapshot(self):
-        return {'artifacts':sum(1 for p in self.root.rglob('*') if p.is_file()),'events':len(self.events),'internet':'public_https','search':'duckduckgo_html'}
+        return {'artifacts':sum(1 for p in self.root.rglob('*') if p.is_file()),'events':len(self.events),'internet':'public_https','search':'duckduckgo_html','evolution_governor':True}
