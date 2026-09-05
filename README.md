@@ -1,5 +1,7 @@
 # AEON — Artificial Evolutionary Organizational Network
 
+**Release: v0.2.0**
+
 A research-first simulation where 100 specialized AI market intelligences become a living digital civilization.
 
 > **Don't build agents. Build the world where they evolve.**
