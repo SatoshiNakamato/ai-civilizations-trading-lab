@@ -23,11 +23,23 @@ def test_world_confines_artifacts(tmp_path):
     assert (tmp_path / created).read_text() == "hello"
 
 
-def test_world_rejects_unapproved_websites(tmp_path):
+def test_world_rejects_non_https_targets(tmp_path):
     world = InternetWorld(str(tmp_path))
-    try:
-        world.browse("A001", "https://example.com")
-    except PermissionError:
-        pass
-    else:
-        raise AssertionError("unapproved domain was allowed")
+    for url in ("http://example.com", "file:///etc/passwd", "ftp://example.com"):
+        try:
+            world.browse("A001", url)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError(f"unsafe URL scheme was allowed: {url}")
+
+
+def test_world_rejects_private_and_loopback_hosts(tmp_path):
+    world = InternetWorld(str(tmp_path))
+    for url in ("https://127.0.0.1", "https://localhost", "https://10.0.0.1"):
+        try:
+            world.browse("A001", url)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError(f"non-public host was allowed: {url}")
