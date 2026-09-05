@@ -1,34 +1,28 @@
 # Release Notes
 
-## v0.1.0 — Autonomous Civilization Runtime
+## v0.2.0 — Endurance + Twenty-System Civilization Runtime
 
-**Date:** 2026-09-04
+**Date:** 2026-09-05
 
-This release establishes the first continuous autonomous runtime for the AI Civilization Trading Lab.
+AEON v0.2.0 is a release-hardening milestone for the autonomous civilization simulation.
 
-### Core capabilities
+### Highlights
 
-1. **Agent registry** — agents can be represented independently with their own research/strategy state.
-2. **Research pipeline** — agents generate independent hypotheses rather than relying on one shared thesis.
-3. **Cross-agent challenge** — candidate decisions can be challenged before execution.
-4. **Evidence verification** — hypotheses are scored against evidence and executionability.
-5. **Opportunity ranking** — surviving opportunities are ranked for downstream decision-making.
-6. **Risk governor** — execution is subject to explicit risk gates.
-7. **Deployment policy** — deployment decisions are separated from research decisions.
-8. **Bankr integration** — configured Bankr agents can be authenticated and selected for deployment workflows.
-9. **On-chain observation** — deployment outcomes can be tracked after execution.
-10. **P&L tracking** — outcomes feed portfolio and performance measurement.
-11. **Strategy metrics/leaderboards** — strategy performance can be compared over time.
-12. **Strategy evolution** — measured outcomes can inform future strategy selection and adaptation.
+- Twenty explicit civilization systems participate in the life loop: identity, needs, goals, memory, reflection, relationships, culture, organizations, economy, jobs, contracts, research, experiments, discoveries, reputation, innovation, lineage, migration, governance and endurance.
+- Endurance telemetry reports current RSS separately from peak RSS and adapts the active workload under memory pressure.
+- State histories are bounded and persistence is throttled during normal multi-tick operation while still forcing safe checkpoints at run boundaries and pressure events.
+- Real-data market validation is used for research scoring while live execution remains disabled by default.
+- Public-web research is bounded and domain-controlled; generated artifacts remain world-scoped.
+- Regression coverage reaches 91 passing tests in the release validation run.
 
-### Operations
+### Resource behavior
 
-The hosted worker runs continuously and persists runtime state under the configured data directory. Voroa can auto-deploy changes from the GitHub `main` branch.
+The runtime is intended to remain usable in constrained environments such as mobile/hosted workers. A long run may take materially longer when market-data requests are slow; canceling a run safely stops the current process rather than indicating a corrupted civilization state.
 
-### Security
+### Security posture
 
-Secrets such as Bankr API keys must remain in the host's environment/secret manager. Never commit credentials to Git.
+Creator control-plane commands are intentionally omitted from the public quick-start documentation. Secrets, credentials and private runtime state must never be committed to Git. Live trading remains a separate operational decision behind explicit credentials, risk limits, deployment policy and human controls.
 
-### Known limitation
+### Distribution
 
-The current release is an infrastructure/runtime milestone. Live autonomous deployment should remain behind the deployment policy and risk gates until production credentials, funding, market-data quality, and operational limits are explicitly configured.
+The GitHub repository is the canonical source distribution. Tagged GitHub source archives should be treated as reproducible release snapshots; no private state or credentials are part of the release.
