@@ -40,7 +40,7 @@ class TradingCivilizationV1:
         if value is None: return None
         if is_dataclass(value): return asdict(value)
         if hasattr(value, "__dict__") and vars(value): return dict(vars(value))
-        names=("cycle","opened","closed","realized_pnl","profitable_traders","status","token_address","tx_hash","order_id","net_edge","buy_venue","sell_venue","buy_price","sell_price")
+        names=("cycle","opened","closed","realized_pnl","profitable_traders","status","token_address","tx_hash","order_id","net_edge","buy_venue","sell_venue","buy_price","sell_price","observed_at","quantity","notional_usd","buy_depth","sell_depth","executable","verification")
         payload={name:getattr(value,name) for name in names if hasattr(value,name)}
         return payload if payload else value
 
@@ -61,15 +61,18 @@ class TradingCivilizationV1:
         return sent
 
     def _send_arbitrage_alert(self, opportunity):
-        if not opportunity or getattr(opportunity,"status","")!="validated": return 0
-        candidate=AlertCandidate(title=f"Arbitrage: {opportunity.asset} {opportunity.buy_venue} → {opportunity.sell_venue}",category="arbitrage",
-            summary=(f"Validated live public-market dislocation. Buy {opportunity.buy_venue} @ {opportunity.buy_price:.8g}; "
-                     f"sell {opportunity.sell_venue} @ {opportunity.sell_price:.8g}. "
-                     f"Gross edge={opportunity.gross_edge:.2%}; fees={opportunity.fees:.2%}; slippage={opportunity.slippage:.2%}; "
-                     f"estimated net edge={opportunity.net_edge:.2%}. This is an information alert; execute manually."),
+        if not opportunity or getattr(opportunity,"status","")!="validated" or not getattr(opportunity,"executable",False): return 0
+        observed=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(opportunity.observed_at)) if getattr(opportunity,"observed_at",0) else "unknown"
+        candidate=AlertCandidate(title=f"Verified arbitrage: {opportunity.asset} {opportunity.buy_venue} → {opportunity.sell_venue}",category="arbitrage",
+            summary=(f"Verified executable public-market opportunity observed {observed}. Buy {opportunity.asset} on {opportunity.buy_venue} @ VWAP ~{opportunity.buy_price:.10g}; "
+                     f"sell on {opportunity.sell_venue} @ VWAP ~{opportunity.sell_price:.10g}; quantity={opportunity.quantity:.12g}; notional=${opportunity.notional_usd:.2f}. "
+                     f"Top-of-book gross edge={opportunity.gross_edge:.2%}; order-book slippage={opportunity.slippage:.2%}; fees={opportunity.fees:.2%}; "
+                     f"executable net edge={opportunity.net_edge:.2%}. Pre-funded balances on both venues are required; execute manually."),
             confidence=opportunity.confidence,edge=opportunity.net_edge,risk=opportunity.risk,
-            sources=tuple(opportunity.sources),agent="LIVE-ARBITRAGE",
-            buy_venue=opportunity.buy_venue,sell_venue=opportunity.sell_venue,buy_price=opportunity.buy_price,sell_price=opportunity.sell_price)
+            sources=tuple(opportunity.sources),agent="DEPTH-VERIFIER",
+            buy_venue=opportunity.buy_venue,sell_venue=opportunity.sell_venue,buy_price=opportunity.buy_price,sell_price=opportunity.sell_price,
+            observed_at=opportunity.observed_at,quantity=opportunity.quantity,notional_usd=opportunity.notional_usd,
+            executable=True,verification=opportunity.verification)
         return 1 if self.email.send(candidate) else 0
 
     def cycle(self):
@@ -88,26 +91,25 @@ class TradingCivilizationV1:
         discovered=self.alpha.scan_and_alert(limit=5)
         telemetry.stage("alerts","ok",alpha_sent+sum(1 for x in discovered if x.score>=.70),"alpha alerts delivered from research and public DEX discovery")
 
-        arb=None; arb_alert=0
+        arb=None; arb_alert=0; verified_count=0
         try:
-            # Prefer the live public scanner when available. The cycle fallback
-            # keeps the orchestration contract usable for lightweight runtimes
-            # and tests without changing production alert-only behavior.
             scanner=getattr(getattr(self.arbitrage,"runtime",None),"scanner",None)
             if scanner is not None and hasattr(scanner,"scan_once"):
                 arb=scanner.scan_once()
+                verified_count=len(getattr(scanner,"last_opportunities",[]) or [])
+                arb_alert=int(getattr(scanner,"last_alerts_sent",0) or 0)
             else:
                 arb=self.arbitrage.cycle()
-            arb_alert=self._send_arbitrage_alert(arb)
-            telemetry.stage("arbitrage","ok",1 if arb else 0,"live public quotes/order books scanned")
+                verified_count=1 if arb and getattr(arb,"executable",False) else 0
+                arb_alert=self._send_arbitrage_alert(arb)
+            telemetry.stage("arbitrage","ok",verified_count,"fresh public L2 opportunities verified")
             if arb: self._event("arbitrage","SYSTEM","validated",self._as_payload(arb))
-            if arb_alert: telemetry.stage("arbitrage_alert","ok",arb_alert,"validated arbitrage alert delivered")
+            telemetry.stage("arbitrage_alert","ok",arb_alert,"verified arbitrage alerts delivered")
         except Exception as exc:
             self._event("arbitrage","SYSTEM","error",{"error":f"{type(exc).__name__}: {exc}"})
-            telemetry.stage("arbitrage","error",0,"public arbitrage scan unavailable; research continued")
+            telemetry.stage("arbitrage","error",0,"public arbitrage verification unavailable; no arbitrage alert emitted")
+            telemetry.stage("arbitrage_alert","error",0,"no verified arbitrage alert emitted")
 
-        # Bankr/token deployment is deliberately paused. Do not simulate,
-        # submit, or consume deployment quota in the production intelligence loop.
         telemetry.stage("ranking","ok",len(top),"research candidates ranked")
         telemetry.stage("risk","ok",len(top),"risk review completed for alerting")
         telemetry.stage("deployment_policy","disabled",0,"token deployment paused")
