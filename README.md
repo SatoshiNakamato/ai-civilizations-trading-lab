@@ -9,6 +9,8 @@ A research-first simulation where 100 specialized AI market intelligences become
 **Project:** [@aeongithub](https://x.com/aeongithub)  
 **Creator:** [@royaltheose](https://x.com/royaltheose)
 
+**Project enquiries:** iNeed2p@wearehackerone.com
+
 ## What is new
 
 AEON combines individual cognition with an emergent social/economic layer. Agents form organizations, exchange bounded strategy memes, mutate hypotheses, accumulate social capital, research the public web, create world-scoped artifacts and compete for evidence-backed influence.
