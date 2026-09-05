@@ -35,6 +35,7 @@ class CommandCenter:
 
     def _record(self, text):
         cmd=CreatorCommand(text, datetime.now(timezone.utc).isoformat()); self.history.append(cmd)
+        self.history=self.history[-200:]
         with open(self.state_file,'a',encoding='utf-8') as f: f.write(json.dumps(cmd.__dict__)+'\n')
 
     def issue(self, text):
@@ -49,9 +50,9 @@ class CommandCenter:
             self.paused=False; return {'ok':True,'message':'Civilization resumed.'}
         if cmd in {'shutdown','kill'}: self.shutdown=True; self.paused=True; return {'ok':True,'message':'EMERGENCY SHUTDOWN: autonomous loop frozen.'}
         if cmd=='speak':
-            msg=text[len(parts[0]):].strip(); self.runtime.civilization.events.append(f'CREATOR: {msg}'); return {'ok':True,'message':'Creator message entered into civilization.','text':msg}
+            msg=text[len(parts[0]):].strip(); self.runtime.civilization.events.append(f'CREATOR: {msg}'); self.runtime.civilization.events=self.runtime.civilization.events[-100:]; return {'ok':True,'message':'Creator message entered into civilization.','text':msg}
         if cmd=='tell' and len(parts)>=3:
-            aid=parts[1]; msg=' '.join(parts[2:]); self.runtime.civilization.events.append(f'CREATOR -> {aid}: {msg}'); return {'ok':True,'recipient':aid,'text':msg}
+            aid=parts[1]; msg=' '.join(parts[2:]); self.runtime.civilization.events.append(f'CREATOR -> {aid}: {msg}'); self.runtime.civilization.events=self.runtime.civilization.events[-100:]; return {'ok':True,'recipient':aid,'text':msg}
         if cmd=='run':
             if self.paused or self.shutdown: return {'ok':False,'error':'civilization is paused'}
             try: steps=max(1,min(1000,int(parts[1]))) if len(parts)>=2 else 1
@@ -66,8 +67,11 @@ class CommandCenter:
 
     def status(self, compact=False):
         state=self.runtime.civilization.snapshot(); life=self.runtime.life.snapshot(); internet=self.runtime.world.snapshot()
+        agents=state.get('agents',0)
+        if isinstance(agents,(list,tuple,dict)): agents=len(agents)
+        elif not isinstance(agents,int): agents=0
         if compact:
-            return {'tick':state.get('tick',0),'beings':len(state.get('agents',[])),'ideas':len(state.get('top_ideas',[])),'events':len(state.get('events',[])),'paused':self.paused,'shutdown':self.shutdown,'commands':len(self.history),'life':life,'internet':internet}
+            return {'tick':state.get('tick',0),'generation':state.get('generation',0),'beings':agents,'ideas':state.get('ideas',0),'messages':state.get('messages',0),'paused':self.paused,'shutdown':self.shutdown,'commands':len(self.history),'life':life,'internet':internet}
         state.update({'paused':self.paused,'shutdown':self.shutdown,'creator':self.charter.creator_name,'charter_fingerprint':self.charter.fingerprint,'commands':len(self.history),'life':life,'internet':internet})
         if self.treasury is not None: state['treasury']=round(self.treasury.balance,2)
         return state
