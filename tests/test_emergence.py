@@ -2,8 +2,9 @@ from civilizations.core import Civilization
 from civilizations.emergence import EmergenceEngine
 
 
-def test_emergence_forms_organizations_and_tracks_state():
+def test_emergence_forms_organizations_and_tracks_state(deterministic_market_provider):
     civilization = Civilization(size=20, seed=7)
+    civilization.verifier.provider = deterministic_market_provider
     state = civilization.step()
     emergence = state["emergence"]
     assert emergence["memes"] >= 20
