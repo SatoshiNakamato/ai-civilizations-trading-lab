@@ -90,7 +90,14 @@ class TradingCivilizationV1:
 
         arb=None; arb_alert=0
         try:
-            arb=self.arbitrage.runtime.scanner.scan_once()
+            # Prefer the live public scanner when available. The cycle fallback
+            # keeps the orchestration contract usable for lightweight runtimes
+            # and tests without changing production alert-only behavior.
+            scanner=getattr(getattr(self.arbitrage,"runtime",None),"scanner",None)
+            if scanner is not None and hasattr(scanner,"scan_once"):
+                arb=scanner.scan_once()
+            else:
+                arb=self.arbitrage.cycle()
             arb_alert=self._send_arbitrage_alert(arb)
             telemetry.stage("arbitrage","ok",1 if arb else 0,"live public quotes/order books scanned")
             if arb: self._event("arbitrage","SYSTEM","validated",self._as_payload(arb))
