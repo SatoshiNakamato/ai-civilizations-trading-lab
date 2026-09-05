@@ -74,6 +74,30 @@ These are simulation mechanisms, not a claim of literal consciousness or sentien
 - **Bounded creation** — generated artifacts stay inside the civilization's world boundary.
 - **Alert-only live boundary** — live execution remains disabled by default and is not required to run the civilization.
 
+## Governed autonomous evolution
+
+AEON now has a dedicated **Evolution Governor** for the next level of agent autonomy: agents can create persistent memory, research artifacts and evolution proposals without receiving unrestricted host or repository control.
+
+The boundary has three layers:
+
+1. **Agent workspace** — agents may create files and nested folders only inside governed namespaces such as `world_artifacts/agent_memory/<agent>/`.
+2. **Governor** — every write is checked for path traversal, symlinks, per-file bytes, total storage and file-count quotas and is recorded in an append-only audit log.
+3. **Promotion boundary** — source-code changes are proposals, not direct source writes. An optional GitHub publisher can persist governed artifacts to a dedicated `aeon/agent-memory-*` branch; it cannot publish to `main` and it rejects source namespaces.
+
+This creates a useful form of machine evolution: the civilization can accumulate its own memory, preserve discoveries, form hypotheses about how it should improve and leave durable artifacts for later generations. The project remains human-reviewable because source mutation and production execution stay outside the agent's authority.
+
+### Optional GitHub persistence
+
+Set these only in the hosted worker environment, never inside repository files:
+
+- `AEON_GITHUB_TOKEN` — a GitHub fine-grained token with the minimum repository Contents permission needed for the dedicated branch workflow.
+- `AEON_GITHUB_REPO` — defaults to `SatoshiNakamato/ai-civilizations-trading-lab`.
+- `AEON_GITHUB_BASE_BRANCH` — defaults to `main`.
+
+The runtime should publish a batch after a cycle rather than letting 100 agents independently push. This gives the governor one auditable promotion point and avoids branch/commit storms.
+
+**Important:** do not give an agent a token that can administer the repository, manage secrets, alter workflows or bypass branch protection. The autonomy model is intentionally powerful inside its workspace and deliberately weak at the project-control boundary.
+
 ## Notification governance
 
 AEON treats operator notifications as a scarce resource rather than an unbounded side effect.
@@ -119,6 +143,7 @@ The worker uses a PID guard to avoid accidental duplicate runtimes and writes di
 - `simulation/` — continuous civilization workers
 - `backtesting/` — deterministic validation
 - `risk/` — exposure and safety gates
+- `execution/` — guarded order submission boundary
 - `web/` — local AEON console/API
 - `tests/` — automated regression, system-integration, Arena, endurance and notification-governance tests
 - `.github/workflows/` — deterministic, hermetic CI
