@@ -55,7 +55,13 @@ class AutonomousResearchEngine:
             rank = h.score * .55 + ev * .30 + d.survival_score * .15
             candidates.append(Opportunity(h, d, ev, rank, rank * (1 - h.risk)))
         candidates.sort(key=lambda x: x.risk_adjusted, reverse=True)
-        survivors = candidates[:max(1, limit)]
+        # Keep the executor cohort represented in the handoff whenever the
+        # requested survivor budget permits it. Ranking still determines the
+        # remaining slots, so coverage does not replace ranking quality.
+        preferred_ids = {a for a in ("A001", "A002", "A003", "A004") if a in agents}
+        covered = [x for x in candidates if x.hypothesis.agent in preferred_ids][:limit]
+        covered_ids = {x.hypothesis.agent for x in covered}
+        survivors = covered + [x for x in candidates if x.hypothesis.agent not in covered_ids][:max(0, limit - len(covered))]
         self.history.extend(survivors); self.history = self.history[-100:]
         return survivors
     def _debate(self, h, digest):
