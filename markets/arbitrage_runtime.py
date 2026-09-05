@@ -47,6 +47,14 @@ class ArbitrageRuntime:
             self.leaderboard.record(fill.agent, fill.realized_pnl)
         return results
 
+    @staticmethod
+    def _price(quote, field: str) -> float:
+        if hasattr(quote, field):
+            return float(getattr(quote, field))
+        if isinstance(quote, dict):
+            return float(quote[field])
+        return float(quote)
+
     def close(self, fill_id, quotes):
         """Close a paper fill using venue quotes and record its PnL."""
         fill = self.paper.open_fills.get(fill_id)
@@ -55,9 +63,11 @@ class ArbitrageRuntime:
 
         buy_quote = quotes[fill.buy_venue]
         sell_quote = quotes[fill.sell_venue]
-        buy_price = float(getattr(buy_quote, "ask", buy_quote["ask"] if isinstance(buy_quote, dict) else buy_quote))
-        sell_price = float(getattr(sell_quote, "bid", sell_quote["bid"] if isinstance(sell_quote, dict) else sell_quote))
-        closed = self.paper.close(fill_id, buy_price, sell_price)
+        closed = self.paper.close(
+            fill_id,
+            self._price(buy_quote, "ask"),
+            self._price(sell_quote, "bid"),
+        )
         self.leaderboard.record(closed.agent, closed.realized_pnl)
         return closed
 
