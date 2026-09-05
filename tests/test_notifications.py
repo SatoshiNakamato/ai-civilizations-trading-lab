@@ -1,4 +1,4 @@
-from civilizations.notifications import NotificationGovernor, NotificationGovernorConfig
+from civilizations.notifications import NotificationGovernor, NotificationGovernorConfig, SMTPEmailSender
 
 
 class Clock:
@@ -17,7 +17,7 @@ def test_governor_deduplicates_and_rate_limits():
         NotificationGovernorConfig(max_notifications=2, window_seconds=60, dedupe_seconds=300),
         clock=clock,
     )
-    assert governor.notify("critical", "Alpha", "BTC spread") .sent
+    assert governor.notify("critical", "Alpha", "BTC spread").sent
     assert governor.notify("critical", "Alpha", "BTC spread").reason == "deduplicated"
     clock.now = 1
     assert governor.notify("high", "Second", "ETH spread").sent
@@ -40,3 +40,32 @@ def test_provider_failure_degrades_without_raising():
 
 def test_fingerprint_is_deterministic():
     assert NotificationGovernor.fingerprint("CRITICAL", "A", "B") == NotificationGovernor.fingerprint("critical", "A", "B")
+
+
+def test_governor_reads_voroa_environment(monkeypatch):
+    monkeypatch.setenv("AEON_NOTIFICATION_MAX_PER_CYCLE", "2")
+    monkeypatch.setenv("AEON_NOTIFICATION_MAX_PER_DAY", "7")
+    monkeypatch.setenv("AEON_NOTIFICATION_COOLDOWN_SECONDS", "11")
+    monkeypatch.setenv("AEON_NOTIFICATION_DEDUP_WINDOW_SECONDS", "22")
+    monkeypatch.setenv("AEON_NOTIFICATION_MIN_SEVERITY", "CRITICAL")
+    monkeypatch.setenv("AEON_NOTIFICATION_ENABLED", "true")
+    monkeypatch.setenv("AEON_NOTIFICATION_EMAIL_ENABLED", "true")
+    config = NotificationGovernorConfig.from_env()
+    assert config.max_notifications == 2
+    assert config.max_per_day == 7
+    assert config.cooldown_seconds == 11
+    assert config.dedupe_seconds == 22
+    assert config.min_severity == "CRITICAL"
+
+
+def test_smtp_sender_reads_delivery_variables(monkeypatch):
+    monkeypatch.setenv("CIVILIZATION_SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("CIVILIZATION_SMTP_PORT", "587")
+    monkeypatch.setenv("CIVILIZATION_SMTP_USER", "bot@example.test")
+    monkeypatch.setenv("CIVILIZATION_SMTP_PASSWORD", "secret")
+    monkeypatch.setenv("CIVILIZATION_ALERT_FROM", "alerts@example.test")
+    monkeypatch.setenv("CIVILIZATION_ALERT_EMAIL", "owner@example.test")
+    sender = SMTPEmailSender()
+    assert (sender.host, sender.port, sender.user, sender.sender, sender.recipient) == (
+        "smtp.example.test", 587, "bot@example.test", "alerts@example.test", "owner@example.test"
+    )
