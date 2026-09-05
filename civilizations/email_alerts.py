@@ -59,7 +59,7 @@ class EmailAlertGateway:
         self.suppressed = 0
         if governor is None:
             sender = SMTPEmailSender(recipient=self.recipient)
-            governor = NotificationGovernor()
+            governor = NotificationGovernor(sender)
         self.governor = governor
 
     def enabled(self) -> bool:
@@ -121,7 +121,7 @@ class EmailAlertGateway:
             return False
         subject, body = self._message(candidate)
         result = self.governor.notify(severity=candidate.severity, subject=subject, body=body)
-        if result.get("sent"):
+        if result.sent:
             key = f"{candidate.category}:{candidate.title.strip().lower()}"
             self.last_sent[key] = time()
             self.sent += 1
