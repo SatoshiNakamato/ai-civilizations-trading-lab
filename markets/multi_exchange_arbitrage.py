@@ -5,16 +5,15 @@ import os
 import time
 from typing import Any
 
-import ccxt
-
 from civilizations.email_alerts import AlertCandidate, EmailAlertGateway
 from civilizations.opportunities import Opportunity, OpportunityEngine
 
 
 DEFAULT_EXCHANGES = (
-    "binance", "bybit", "okx", "kucoin", "gateio",
-    "mexc", "bitget", "htx", "kraken", "coinbase",
+    "binance", "bybit", "okx", "kucoin", "gateio", "mexc", "bitget",
+    "htx", "kraken", "coinbase", "bitmart", "bingx", "phemex", "crypto_com",
 )
+DEFAULT_QUOTES = ("USDT", "USDC", "USD", "FDUSD", "USDE")
 
 
 @dataclass(frozen=True)
@@ -29,11 +28,12 @@ class MarketQuote:
 
 
 class MultiExchangeArbitrageScanner:
-    """Keyless public spot-market arbitrage scanner across many exchanges.
+    """Public spot-market scanner across all active configured exchange markets.
 
-    Market data is public: no API credentials are used and this component never
-    submits an order. It discovers cross-exchange price dislocations and emits
-    actionable information alerts for manual execution.
+    The scanner discovers every active spot symbol matching the configured quote
+    currencies; it is not restricted to a hard-coded coin list. It never submits
+    orders. CCXT is imported lazily so research/test modules can load without the
+    live-market dependency installed.
     """
 
     def __init__(
@@ -41,7 +41,7 @@ class MultiExchangeArbitrageScanner:
         engine: OpportunityEngine | None = None,
         alert_gateway: EmailAlertGateway | None = None,
         exchanges: tuple[str, ...] | None = None,
-        quote_currencies: tuple[str, ...] = ("USDT", "USDC", "USD"),
+        quote_currencies: tuple[str, ...] | None = None,
         min_volume_usd: float = 2_500.0,
         min_net_edge: float = 0.003,
         timeout_ms: int = 8_000,
@@ -49,13 +49,10 @@ class MultiExchangeArbitrageScanner:
     ):
         self.engine = engine or OpportunityEngine()
         self.alert_gateway = alert_gateway
-        names = exchanges or tuple(
-            x.strip().lower() for x in os.getenv(
-                "CIVILIZATION_ARBITRAGE_EXCHANGES", ",".join(DEFAULT_EXCHANGES)
-            ).split(",") if x.strip()
-        )
-        self.exchange_names = names
-        self.quote_currencies = tuple(x.upper() for x in quote_currencies)
+        configured = os.getenv("CIVILIZATION_ARBITRAGE_EXCHANGES", ",".join(DEFAULT_EXCHANGES))
+        self.exchange_names = exchanges or tuple(x.strip().lower() for x in configured.split(",") if x.strip())
+        configured_quotes = os.getenv("CIVILIZATION_ARBITRAGE_QUOTES", ",".join(DEFAULT_QUOTES))
+        self.quote_currencies = quote_currencies or tuple(x.strip().upper() for x in configured_quotes.split(",") if x.strip())
         self.min_volume_usd = float(min_volume_usd)
         self.min_net_edge = float(min_net_edge)
         self.timeout_ms = int(timeout_ms)
@@ -69,11 +66,24 @@ class MultiExchangeArbitrageScanner:
         self.errors: dict[str, int] = {}
         self.alerts_sent = 0
 
+    @staticmethod
+    def _ccxt():
+        try:
+            import ccxt
+        except ImportError as exc:
+            raise RuntimeError(
+                "CCXT is required for live multi-exchange scanning. Install it with "
+                "`python -m pip install -r requirements.txt`."
+            ) from exc
+        return ccxt
+
     def _client(self, name: str):
         if name in self._clients:
             return self._clients[name]
-        cls = getattr(ccxt, name)
-        client = cls({"enableRateLimit": True, "timeout": self.timeout_ms})
+        ccxt = self._ccxt()
+        if not hasattr(ccxt, name):
+            raise ValueError(f"Unsupported CCXT exchange: {name}")
+        client = getattr(ccxt, name)({"enableRateLimit": True, "timeout": self.timeout_ms})
         self._clients[name] = client
         return client
 
@@ -90,7 +100,7 @@ class MultiExchangeArbitrageScanner:
             }
             self._markets[name] = symbols
             return symbols
-        except Exception as exc:
+        except Exception:
             self.errors[name] = self.errors.get(name, 0) + 1
             return set()
 
@@ -108,6 +118,32 @@ class MultiExchangeArbitrageScanner:
         except (TypeError, ValueError):
             return None
 
+    def _fetch_tickers(self, name: str, symbols: set[str]) -> dict[str, dict]:
+        client = self._client(name)
+        if not symbols:
+            return {}
+        if client.has.get("fetchTickers"):
+            try:
+                return client.fetch_tickers(list(symbols))
+            except Exception:
+                # Some exchanges cap symbols per request. Batch the full discovered
+                # market universe instead of falling back to a tiny coin allow-list.
+                result: dict[str, dict] = {}
+                ordered = sorted(symbols)
+                for start in range(0, len(ordered), 100):
+                    try:
+                        result.update(client.fetch_tickers(ordered[start:start + 100]))
+                    except Exception:
+                        continue
+                return result
+        result = {}
+        for symbol in symbols:
+            try:
+                result[symbol] = client.fetch_ticker(symbol)
+            except Exception:
+                continue
+        return result
+
     def _refresh(self) -> None:
         now = time.time()
         if now - self._last_refresh < self.refresh_seconds:
@@ -115,32 +151,17 @@ class MultiExchangeArbitrageScanner:
         self._last_refresh = now
         for name in self.exchange_names:
             try:
-                client = self._client(name)
                 symbols = self._load_markets(name)
-                if not symbols:
-                    continue
-                if client.has.get("fetchTickers"):
-                    tickers = client.fetch_tickers(list(symbols))
-                else:
-                    tickers = {}
-                    # Fallback for exchanges without bulk tickers. Keep the
-                    # public-data scan bounded by the exchange's own markets.
-                    for symbol in symbols:
-                        try:
-                            tickers[symbol] = client.fetch_ticker(symbol)
-                        except Exception:
-                            continue
-                for symbol, ticker in tickers.items():
-                    q = self._quote(name, symbol, ticker)
-                    if q is None:
+                for symbol, ticker in self._fetch_tickers(name, symbols).items():
+                    quote = self._quote(name, symbol, ticker)
+                    if quote is None:
                         continue
-                    # Require enough visible quote-side depth when available.
-                    quote_volume = max(q.bid * q.bid_volume, q.ask * q.ask_volume)
+                    quote_volume = max(quote.bid * quote.bid_volume, quote.ask * quote.ask_volume)
                     if quote_volume and quote_volume < self.min_volume_usd:
                         continue
-                    self._quotes.setdefault(symbol, [])
-                    self._quotes[symbol] = [x for x in self._quotes[symbol] if x.exchange != name]
-                    self._quotes[symbol].append(q)
+                    current = [q for q in self._quotes.get(symbol, []) if q.exchange != name]
+                    current.append(quote)
+                    self._quotes[symbol] = current
             except Exception:
                 self.errors[name] = self.errors.get(name, 0) + 1
 
@@ -190,15 +211,13 @@ class MultiExchangeArbitrageScanner:
             return False
         candidate = AlertCandidate(
             title=f"Arbitrage: {result.asset} {result.buy_venue} → {result.sell_venue}",
-            category="arbitrage",
-            summary=(
+            category="arbitrage", summary=(
                 f"Live public-market opportunity detected. Buy {result.asset} on {result.buy_venue} "
                 f"at ~{result.buy_price:.10g}; sell on {result.sell_venue} at ~{result.sell_price:.10g}. "
                 f"Gross edge={result.gross_edge:.2%}; estimated fees={result.fees:.2%}; "
-                f"estimated net edge={result.net_edge:.2%}. Verify order-book depth, transfer/settlement "
-                "constraints and fees before manually acting."
-            ),
-            confidence=result.confidence, edge=result.net_edge, risk=result.risk,
+                f"estimated net edge={result.net_edge:.2%}. Verify order-book depth, settlement "
+                "constraints and fees before acting."
+            ), confidence=result.confidence, edge=result.net_edge, risk=result.risk,
             sources=tuple(result.sources), agent="MULTI-EXCHANGE-SCOUT",
             buy_venue=result.buy_venue, sell_venue=result.sell_venue,
             buy_price=result.buy_price, sell_price=result.sell_price,
@@ -220,7 +239,8 @@ class MultiExchangeArbitrageScanner:
     def snapshot(self) -> dict:
         return {
             "exchanges": list(self.exchange_names),
-            "symbols": len(self._quotes),
+            "quotes": len(self._quotes),
+            "market_sets": {name: len(symbols) for name, symbols in self._markets.items()},
             "scans": self.scans,
             "alerts_sent": self.alerts_sent,
             "errors": dict(self.errors),
