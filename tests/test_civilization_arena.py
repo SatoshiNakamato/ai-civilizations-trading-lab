@@ -60,10 +60,10 @@ def test_missing_external_source_is_rejected():
         assert "source" in str(exc)
 
 
-def test_real_civilization_step_creates_arena_commitments_without_self_resolving(DeterministicMarketProvider):
+def test_real_civilization_step_creates_arena_commitments_without_self_resolving(deterministic_market_provider):
     arena = CivilizationArena()
     civilization = Civilization(size=2, seed=7, civilization_id="CIV-REAL", arena=arena)
-    civilization.verifier.provider = DeterministicMarketProvider()
+    civilization.verifier.provider = deterministic_market_provider
     snapshot = civilization.step()
     assert snapshot["civilization_id"] == "CIV-REAL"
     assert snapshot["arena"]["civilizations"] == 1
