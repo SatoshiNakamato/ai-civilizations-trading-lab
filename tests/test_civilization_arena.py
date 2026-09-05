@@ -1,6 +1,7 @@
 from pytest import approx
 
 from civilizations.arena import CivilizationArena, ForecastOutcome
+from civilizations.core import Civilization
 
 
 def test_commitment_is_immutable_and_resolves_once():
@@ -57,3 +58,14 @@ def test_missing_external_source_is_rejected():
         assert False, "expected source validation"
     except ValueError as exc:
         assert "source" in str(exc)
+
+
+def test_real_civilization_step_creates_arena_commitments_without_self_resolving():
+    arena = CivilizationArena()
+    civilization = Civilization(size=2, seed=7, civilization_id="CIV-REAL", arena=arena)
+    snapshot = civilization.step()
+    assert snapshot["civilization_id"] == "CIV-REAL"
+    assert snapshot["arena"]["civilizations"] == 1
+    assert snapshot["arena"]["commitments"] == 2
+    assert snapshot["arena"]["resolved"] == 0
+    assert all(c.civilization_id == "CIV-REAL" for c in arena.commitments.values())
