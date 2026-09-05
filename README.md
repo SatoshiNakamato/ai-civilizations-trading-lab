@@ -73,6 +73,12 @@ For a lightweight local simulation run:
 python -m civilizations.core
 ```
 
+## Runtime architecture
+
+The autonomous civilization worker is separated from the Creator control plane. The worker owns the live world loop, persists bounded state and continues operating when a control session disconnects or is closed. Control-plane requests are passed to the worker through a small local command queue, so observing or talking to the civilization does not stop its ongoing evolution.
+
+The worker uses a PID guard to avoid accidental duplicate runtimes and writes diagnostic output to the local world-state area. An explicit shutdown request is required to stop the autonomous worker.
+
 ## Architecture
 
 - `civilizations/` — agents, cognition, research, society, evolution, emergence, world dynamics and endurance controls
