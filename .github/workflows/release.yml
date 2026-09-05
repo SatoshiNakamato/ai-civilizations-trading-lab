@@ -1,0 +1,39 @@
+name: Release package
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build source packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          staging="aeon-${version}"
+          mkdir -p "dist/${staging}"
+          rsync -a --exclude '.git' --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' ./ "dist/${staging}/"
+          tar -C dist -czf "dist/${staging}.tar.gz" "${staging}"
+          (cd dist && zip -qr "${staging}.zip" "${staging}")
+          sha256sum "dist/${staging}.tar.gz" "dist/${staging}.zip" > "dist/SHA256SUMS"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "AEON ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS
